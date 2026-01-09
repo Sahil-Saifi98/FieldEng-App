@@ -80,7 +80,7 @@ fun LoginScreen(
 
             // Title
             Text(
-                text = "Field Engineer App",
+                text = "ASAP",
                 style = MaterialTheme.typography.headlineLarge,
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFF212121)
@@ -246,46 +246,9 @@ fun LoginScreen(
             }
 
             Spacer(Modifier.height(32.dp))
-
             // Demo Credentials Info
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFFE3F2FD)
-                )
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Info,
-                            contentDescription = "Info",
-                            tint = Color(0xFF1976D2),
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = "Demo Credentials",
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF1976D2)
-                        )
-                    }
 
-                    Spacer(Modifier.height(8.dp))
 
-                    Text(
-                        text = "Employee ID: EMP-2024-001\nPassword: password123",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF1565C0)
-                    )
-                }
-            }
 
             Spacer(Modifier.height(16.dp))
 
