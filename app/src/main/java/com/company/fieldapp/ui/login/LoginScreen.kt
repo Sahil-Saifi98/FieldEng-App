@@ -113,8 +113,8 @@ fun LoginScreen(
                     OutlinedTextField(
                         value = employeeId,
                         onValueChange = { viewModel.onEmployeeIdChange(it) },
-                        label = { Text("Employee ID Or Name") },
-                        placeholder = { Text("EMP-2024-XXX") },
+                        label = { Text("Employee ID") },
+                        placeholder = { Text("ASAPXXXX") },
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Default.Badge,

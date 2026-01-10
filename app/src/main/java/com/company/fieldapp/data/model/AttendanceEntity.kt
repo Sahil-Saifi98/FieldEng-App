@@ -7,6 +7,8 @@ import androidx.room.PrimaryKey
 data class AttendanceEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
+    val userId: String = "", // Add userId to filter by user
+    val employeeId: String = "", // Add employeeId
     val selfiePath: String,
     val latitude: Double,
     val longitude: Double,

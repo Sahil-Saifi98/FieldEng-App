@@ -9,6 +9,12 @@ exports.submitAttendance = async (req, res) => {
   try {
     const { latitude, longitude, timestamp } = req.body;
     
+    console.log('Received attendance submission:', {
+      userId: req.user._id,
+      employeeId: req.user.employeeId,
+      hasFile: !!req.file
+    });
+    
     // Check if selfie file is uploaded
     if (!req.file) {
       return res.status(400).json({
@@ -34,6 +40,8 @@ exports.submitAttendance = async (req, res) => {
       checkInTime: checkInTime
     });
 
+    console.log('✅ Attendance created:', attendance._id);
+
     // Sync to secondary database (HR database)
     syncToSecondary('Attendance', Attendance.schema, attendance.toObject());
 
@@ -43,6 +51,7 @@ exports.submitAttendance = async (req, res) => {
       data: attendance
     });
   } catch (error) {
+    console.error('❌ Attendance submission error:', error);
     res.status(500).json({
       success: false,
       message: error.message
@@ -50,17 +59,20 @@ exports.submitAttendance = async (req, res) => {
   }
 };
 
-// @desc    Get today's attendance
+// @desc    Get today's attendance for logged in user only
 // @route   GET /api/attendance/today
 // @access  Private
 exports.getTodayAttendance = async (req, res) => {
   try {
     const today = moment().format('YYYY-MM-DD');
     
+    // IMPORTANT: Filter by current user's ID
     const attendance = await Attendance.find({
       userId: req.user._id,
       date: today
     }).sort({ timestamp: -1 });
+
+    console.log(`Found ${attendance.length} attendance records for user ${req.user.employeeId} today`);
 
     res.status(200).json({
       success: true,
@@ -75,13 +87,14 @@ exports.getTodayAttendance = async (req, res) => {
   }
 };
 
-// @desc    Get attendance by date range
+// @desc    Get attendance by date range for logged in user only
 // @route   GET /api/attendance?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
 // @access  Private
 exports.getAttendance = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
     
+    // IMPORTANT: Always filter by current user's ID
     let query = { userId: req.user._id };
     
     if (startDate && endDate) {
@@ -106,7 +119,7 @@ exports.getAttendance = async (req, res) => {
   }
 };
 
-// @desc    Get attendance statistics
+// @desc    Get attendance statistics for logged in user only
 // @route   GET /api/attendance/stats
 // @access  Private
 exports.getAttendanceStats = async (req, res) => {
@@ -114,22 +127,22 @@ exports.getAttendanceStats = async (req, res) => {
     const today = moment().format('YYYY-MM-DD');
     const thisMonth = moment().format('YYYY-MM');
 
-    // Count today's check-ins
+    // IMPORTANT: Count only current user's records
     const todayCount = await Attendance.countDocuments({
       userId: req.user._id,
       date: today
     });
 
-    // Count this month's check-ins
     const monthCount = await Attendance.countDocuments({
       userId: req.user._id,
       date: { $regex: `^${thisMonth}` }
     });
 
-    // Count total check-ins
     const totalCount = await Attendance.countDocuments({
       userId: req.user._id
     });
+
+    console.log(`Stats for ${req.user.employeeId}: today=${todayCount}, month=${monthCount}, total=${totalCount}`);
 
     res.status(200).json({
       success: true,

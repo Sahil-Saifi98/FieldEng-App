@@ -1,6 +1,6 @@
 const multer = require('multer');
-const path = require('node:path');
-const fs = require('node:fs');
+const path = require('path');
+const fs = require('fs');
 
 // Ensure upload directories exist
 const ensureDirectoryExists = (dir) => {
@@ -33,23 +33,37 @@ const storage = multer.diskStorage({
   }
 });
 
-// File filter - Accept only images
+// File filter - More flexible for mobile uploads
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = /jpeg|jpg|png|pdf/;
-  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-  const mimetype = allowedTypes.test(file.mimetype);
+  console.log('Uploaded file:', {
+    fieldname: file.fieldname,
+    originalname: file.originalname,
+    mimetype: file.mimetype,
+    size: file.size
+  });
 
-  if (mimetype && extname) {
-    return cb(null, true);
+  // Accept images and PDFs
+  if (
+    file.mimetype === 'image/jpeg' ||
+    file.mimetype === 'image/jpg' ||
+    file.mimetype === 'image/png' ||
+    file.mimetype === 'image/webp' ||
+    file.mimetype === 'application/pdf' ||
+    file.mimetype === 'application/octet-stream' // Sometimes mobile uploads use this
+  ) {
+    cb(null, true);
   } else {
-    cb(new Error('Only .png, .jpg, .jpeg and .pdf format allowed!'));
+    console.error('Invalid file type:', file.mimetype);
+    cb(new Error(`File type ${file.mimetype} not allowed. Only images and PDFs are accepted.`), false);
   }
 };
 
 // Create multer upload instance
 const upload = multer({
   storage: storage,
-  limits: { fileSize: process.env.MAX_FILE_SIZE || 5242880 }, // 5MB default
+  limits: { 
+    fileSize: 10485760 // 10MB
+  },
   fileFilter: fileFilter
 });
 

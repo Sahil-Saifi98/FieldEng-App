@@ -1,14 +1,19 @@
 package com.company.fieldapp.data.repository
 
+import android.content.Context
 import com.company.fieldapp.data.local.AttendanceDao
+import com.company.fieldapp.data.session.SessionManager
 
 class ProfileRepository(
-    private val attendanceDao: AttendanceDao
+    private val attendanceDao: AttendanceDao,
+    private val context: Context
 ) {
+    private val sessionManager = SessionManager(context)
 
     suspend fun getTotalCheckIns(): Int {
         return try {
-            attendanceDao.getTodayAttendance().size
+            val userId = sessionManager.getUserId() ?: return 0
+            attendanceDao.getTodayAttendance(userId).size
         } catch (e: Exception) {
             0
         }
