@@ -9,8 +9,8 @@ import java.util.concurrent.TimeUnit
 
 object RetrofitClient {
 
-    // Backend URL - Using local IP address
-    private const val BASE_URL = "http://192.168.31.47:5000/api/"
+    // Backend URL - Deployed on Render
+    private const val BASE_URL = "https://asap-kc7n.onrender.com/api/"
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
         level = HttpLoggingInterceptor.Level.BODY
