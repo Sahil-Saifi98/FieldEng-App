@@ -1,5 +1,6 @@
 const Attendance = require('../models/Attendance');
 const moment = require('moment');
+const { syncToSecondary } = require('../config/dbSync');
 
 // @desc    Submit attendance
 // @route   POST /api/attendance/submit
@@ -21,7 +22,7 @@ exports.submitAttendance = async (req, res) => {
     const date = moment(timestampDate).format('YYYY-MM-DD');
     const checkInTime = moment(timestampDate).format('HH:mm:ss');
 
-    // Create attendance record
+    // Create attendance record in primary DB
     const attendance = await Attendance.create({
       userId: req.user._id,
       employeeId: req.user.employeeId,
@@ -32,6 +33,9 @@ exports.submitAttendance = async (req, res) => {
       date: date,
       checkInTime: checkInTime
     });
+
+    // Sync to secondary database (HR database)
+    syncToSecondary('Attendance', Attendance.schema, attendance.toObject());
 
     res.status(201).json({
       success: true,

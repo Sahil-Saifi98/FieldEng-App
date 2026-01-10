@@ -1,14 +1,18 @@
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
-const path = require('node:path');
+const path = require('path');
 const connectDB = require('./config/database');
+const { initSecondaryConnection } = require('./config/dbSync');
 
 // Load environment variables
 dotenv.config();
 
-// Connect to MongoDB
+// Connect to MongoDB (Primary and Secondary)
 connectDB();
+
+// Initialize secondary DB connection for syncing
+initSecondaryConnection();
 
 // Initialize express app
 const app = express();

@@ -3,9 +3,9 @@ package com.company.fieldapp.ui.login
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.company.fieldapp.data.model.UserDatabase
+import com.company.fieldapp.data.remote.LoginRequest
+import com.company.fieldapp.data.remote.RetrofitClient
 import com.company.fieldapp.data.session.SessionManager
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -44,31 +44,50 @@ class LoginViewModel(application: Application) : AndroidViewModel(application) {
             _isLoading.value = true
             _errorMessage.value = null
 
-            // Simulate network delay
-            delay(1000)
-
-            // Authenticate user
-            val user = UserDatabase.authenticate(
-                employeeId = _employeeId.value.trim(),
-                password = _password.value
-            )
-
-            if (user != null) {
-                // Save session
-                sessionManager.saveLoginSession(
-                    employeeId = user.employeeId,
-                    name = user.name,
-                    email = user.email,
-                    department = user.department,
-                    designation = user.designation
+            try {
+                // Call backend API
+                val response = RetrofitClient.authApi.login(
+                    LoginRequest(
+                        employeeId = _employeeId.value.trim(),
+                        password = _password.value
+                    )
                 )
 
-                _loginSuccess.value = true
-            } else {
-                _errorMessage.value = "Invalid Employee ID or Password"
-            }
+                if (response.isSuccessful && response.body() != null) {
+                    val authResponse = response.body()!!
 
-            _isLoading.value = false
+                    if (authResponse.success && authResponse.user != null && authResponse.token != null) {
+                        // Save session
+                        sessionManager.saveLoginSession(
+                            token = authResponse.token,
+                            userId = authResponse.user.id,
+                            employeeId = authResponse.user.employeeId,
+                            name = authResponse.user.name,
+                            email = authResponse.user.email,
+                            department = authResponse.user.department,
+                            designation = authResponse.user.designation,
+                            role = authResponse.user.role
+                        )
+
+                        _loginSuccess.value = true
+                    } else {
+                        _errorMessage.value = authResponse.message ?: "Login failed"
+                    }
+                } else {
+                    _errorMessage.value = "Invalid Employee ID or Password"
+                }
+            } catch (e: Exception) {
+                _errorMessage.value = when {
+                    e.message?.contains("Unable to resolve host") == true ->
+                        "Cannot connect to server. Check your internet connection."
+                    e.message?.contains("timeout") == true ->
+                        "Connection timeout. Please try again."
+                    else ->
+                        "Error: ${e.message ?: "Something went wrong"}"
+                }
+            } finally {
+                _isLoading.value = false
+            }
         }
     }
 }
