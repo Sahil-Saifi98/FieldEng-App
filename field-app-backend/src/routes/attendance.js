@@ -8,13 +8,13 @@ const {
   deleteAttendance
 } = require('../controllers/attendanceController');
 const { protect } = require('../middleware/auth');
-const upload = require('../middleware/upload');
+const { uploadSelfie } = require('../middleware/upload');
 
 // All routes are protected (require authentication)
 router.use(protect);
 
-// Submit attendance with selfie upload
-router.post('/submit', upload.single('selfie'), submitAttendance);
+// Submit attendance with selfie upload to Cloudinary
+router.post('/submit', uploadSelfie.single('selfie'), submitAttendance);
 
 // Get today's attendance
 router.get('/today', getTodayAttendance);

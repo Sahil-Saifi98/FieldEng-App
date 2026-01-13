@@ -28,11 +28,16 @@ exports.submitAttendance = async (req, res) => {
     const date = moment(timestampDate).format('YYYY-MM-DD');
     const checkInTime = moment(timestampDate).format('HH:mm:ss');
 
+    // File is uploaded to Cloudinary, req.file.path contains Cloudinary URL
+    const selfieUrl = req.file.path; // This is the Cloudinary URL
+
+    console.log('Selfie uploaded to Cloudinary:', selfieUrl);
+
     // Create attendance record in primary DB
     const attendance = await Attendance.create({
       userId: req.user._id,
       employeeId: req.user.employeeId,
-      selfiePath: req.file.path,
+      selfiePath: selfieUrl, // Store Cloudinary URL instead of local path
       latitude: parseFloat(latitude),
       longitude: parseFloat(longitude),
       timestamp: timestampDate,
