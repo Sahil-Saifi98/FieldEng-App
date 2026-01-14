@@ -28,6 +28,7 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 // Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/attendance', require('./routes/attendance'));
+app.use('/api/admin', require('./routes/admin'));
 
 // Root route
 app.get('/', (req, res) => {
@@ -37,7 +38,8 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     endpoints: {
       auth: '/api/auth',
-      attendance: '/api/attendance'
+      attendance: '/api/attendance',
+      admin: '/api/admin'
     }
   });
 });

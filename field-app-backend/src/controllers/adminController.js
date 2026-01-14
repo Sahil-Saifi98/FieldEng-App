@@ -58,7 +58,7 @@ exports.getAllAttendance = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      count: attendance.length,
+      count: attendanceWithUrls.length,
       data: attendanceWithUrls
     });
   } catch (error) {
@@ -90,7 +90,7 @@ exports.getUserAttendance = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      count: attendance.length,
+      count: attendanceWithUrls.length,
       data: attendanceWithUrls
     });
   } catch (error) {
@@ -195,6 +195,216 @@ exports.toggleUserActive = async (req, res) => {
       data: user
     });
   } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// @desc    Export user data with attendance (Admin only)
+// @route   POST /api/admin/export/user/:userId
+// @access  Private/Admin
+exports.exportUserData = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+    const userId = req.params.userId;
+
+    // Get user data
+    const user = await User.findById(userId).select('-password');
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    // Get attendance data
+    let query = { userId: userId };
+    if (startDate && endDate) {
+      query.date = { $gte: startDate, $lte: endDate };
+    }
+
+    const attendance = await Attendance.find(query).sort({ timestamp: -1 });
+
+    // Prepare export data
+    const exportData = {
+      user: {
+        employeeId: user.employeeId,
+        name: user.name,
+        email: user.email,
+        department: user.department,
+        designation: user.designation
+      },
+      dateRange: {
+        startDate: startDate || 'All',
+        endDate: endDate || 'All'
+      },
+      totalRecords: attendance.length,
+      attendance: attendance.map(att => ({
+        date: att.date,
+        checkInTime: att.checkInTime,
+        latitude: att.latitude,
+        longitude: att.longitude,
+        selfieUrl: att.selfiePath,
+        timestamp: att.timestamp
+      })),
+      exportDate: new Date().toISOString()
+    };
+
+    res.status(200).json({
+      success: true,
+      data: exportData
+    });
+  } catch (error) {
+    console.error('Export user data error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// @desc    Export all data (Admin only)
+// @route   POST /api/admin/export/all
+// @access  Private/Admin
+exports.exportAllData = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body;
+
+    // Build query
+    let query = {};
+    if (startDate && endDate) {
+      query.date = { $gte: startDate, $lte: endDate };
+    }
+
+    // Get all attendance with user data
+    const attendance = await Attendance.find(query)
+      .populate('userId', 'name employeeId email department designation')
+      .sort({ timestamp: -1 });
+
+    // Prepare export data
+    const exportData = {
+      dateRange: {
+        startDate: startDate || 'All',
+        endDate: endDate || 'All'
+      },
+      totalRecords: attendance.length,
+      attendance: attendance.map(att => ({
+        employeeId: att.employeeId,
+        employeeName: att.userId ? att.userId.name : 'Unknown',
+        department: att.userId ? att.userId.department : '',
+        designation: att.userId ? att.userId.designation : '',
+        date: att.date,
+        checkInTime: att.checkInTime,
+        latitude: att.latitude,
+        longitude: att.longitude,
+        selfieUrl: att.selfiePath,
+        timestamp: att.timestamp
+      })),
+      exportDate: new Date().toISOString()
+    };
+
+    res.status(200).json({
+      success: true,
+      data: exportData
+    });
+  } catch (error) {
+    console.error('Export all data error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// @desc    Export attendance as CSV (Admin only)
+// @route   GET /api/admin/export/attendance/csv
+// @access  Private/Admin
+exports.exportAttendanceCSV = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    let query = {};
+    if (startDate && endDate) {
+      query.date = { $gte: startDate, $lte: endDate };
+    }
+
+    const attendance = await Attendance.find(query)
+      .populate('userId', 'name employeeId department designation')
+      .sort({ timestamp: -1 });
+
+    // Create CSV content
+    let csv = 'Employee ID,Employee Name,Department,Designation,Date,Check-in Time,Latitude,Longitude,Selfie URL\n';
+    
+    attendance.forEach(att => {
+      csv += `"${att.employeeId}",`;
+      csv += `"${att.userId ? att.userId.name : 'Unknown'}",`;
+      csv += `"${att.userId ? att.userId.department : ''}",`;
+      csv += `"${att.userId ? att.userId.designation : ''}",`;
+      csv += `"${att.date}",`;
+      csv += `"${att.checkInTime}",`;
+      csv += `${att.latitude},`;
+      csv += `${att.longitude},`;
+      csv += `"${att.selfiePath}"\n`;
+    });
+
+    // Set headers for CSV download
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=attendance_${Date.now()}.csv`);
+    res.status(200).send(csv);
+  } catch (error) {
+    console.error('Export CSV error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+// @desc    Export attendance as JSON (Admin only)
+// @route   GET /api/admin/export/attendance/json
+// @access  Private/Admin
+exports.exportAttendanceJSON = async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    let query = {};
+    if (startDate && endDate) {
+      query.date = { $gte: startDate, $lte: endDate };
+    }
+
+    const attendance = await Attendance.find(query)
+      .populate('userId', 'name employeeId department designation')
+      .sort({ timestamp: -1 });
+
+    const exportData = {
+      exportDate: new Date().toISOString(),
+      dateRange: {
+        startDate: startDate || 'All',
+        endDate: endDate || 'All'
+      },
+      totalRecords: attendance.length,
+      attendance: attendance.map(att => ({
+        employeeId: att.employeeId,
+        employeeName: att.userId ? att.userId.name : 'Unknown',
+        department: att.userId ? att.userId.department : '',
+        designation: att.userId ? att.userId.designation : '',
+        date: att.date,
+        checkInTime: att.checkInTime,
+        latitude: att.latitude,
+        longitude: att.longitude,
+        selfieUrl: att.selfiePath,
+        timestamp: att.timestamp
+      }))
+    };
+
+    // Set headers for JSON download
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename=attendance_${Date.now()}.json`);
+    res.status(200).json(exportData);
+  } catch (error) {
+    console.error('Export JSON error:', error);
     res.status(500).json({
       success: false,
       message: error.message
