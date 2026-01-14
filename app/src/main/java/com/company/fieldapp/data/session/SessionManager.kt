@@ -102,6 +102,9 @@ class SessionManager(context: Context) {
         RetrofitClient.setAuthToken(null)
     }
 
+    fun clearSession() {
+        logout()
+    }
     fun getCurrentUser(): UserSession? {
         if (!isLoggedIn()) return null
 

@@ -55,4 +55,5 @@ object RetrofitClient {
 
     val authApi: AuthApi = retrofit.create(AuthApi::class.java)
     val attendanceApi: AttendanceApi = retrofit.create(AttendanceApi::class.java)
+    val adminApi: AdminApi = retrofit.create(AdminApi::class.java)
 }

@@ -29,8 +29,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 @Composable
 fun LoginScreen(
     viewModel: LoginViewModel = viewModel(),
-    onLoginSuccess: () -> Unit
+    onLoginSuccess: (Boolean) -> Unit
 ) {
+    val isAdmin by viewModel.isAdmin.collectAsState()
     val employeeId by viewModel.employeeId.collectAsState()
     val password by viewModel.password.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
@@ -44,7 +45,7 @@ fun LoginScreen(
     // Navigate on successful login
     LaunchedEffect(loginSuccess) {
         if (loginSuccess) {
-            onLoginSuccess()
+            onLoginSuccess(isAdmin)
         }
     }
 

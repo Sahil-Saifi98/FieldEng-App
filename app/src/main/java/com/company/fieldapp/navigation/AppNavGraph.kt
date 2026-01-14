@@ -12,6 +12,9 @@ import com.company.fieldapp.ui.expenses.ExpensesScreen
 import com.company.fieldapp.ui.login.LoginScreen
 import com.company.fieldapp.ui.tasks.TasksScreen
 import com.company.fieldapp.ui.profile.ProfileScreen
+import com.company.fieldapp.ui.admin.AdminDashboardScreen
+import com.company.fieldapp.ui.admin.AdminAttendanceScreen
+import com.company.fieldapp.ui.admin.AdminExportScreen
 
 @Composable
 fun AppNavGraph() {
@@ -19,9 +22,14 @@ fun AppNavGraph() {
     val context = LocalContext.current
     val sessionManager = SessionManager(context)
 
-    // Determine start destination based on login status
+    // Determine start destination based on login status and role
     val startDestination = if (sessionManager.isLoggedIn()) {
-        NavRoutes.Attendance.route
+        val userRole = sessionManager.getRole()
+        if (userRole == "admin") {
+            NavRoutes.AdminDashboard.route
+        } else {
+            NavRoutes.Attendance.route
+        }
     } else {
         NavRoutes.Login.route
     }
@@ -32,15 +40,22 @@ fun AppNavGraph() {
     ) {
         composable(NavRoutes.Login.route) {
             LoginScreen(
-                onLoginSuccess = {
-                    // Clear back stack and navigate to attendance
-                    navController.navigate(NavRoutes.Attendance.route) {
+                onLoginSuccess = { isAdmin ->
+                    // Navigate based on role
+                    val destination = if (isAdmin) {
+                        NavRoutes.AdminDashboard.route
+                    } else {
+                        NavRoutes.Attendance.route
+                    }
+
+                    navController.navigate(destination) {
                         popUpTo(NavRoutes.Login.route) { inclusive = true }
                     }
                 }
             )
         }
 
+        // Employee routes
         composable(NavRoutes.Attendance.route) {
             AttendanceScreen(navController = navController)
         }
@@ -57,12 +72,24 @@ fun AppNavGraph() {
             ProfileScreen(
                 navController = navController,
                 onLogout = {
-                    // Navigate to login and clear back stack
                     navController.navigate(NavRoutes.Login.route) {
                         popUpTo(0) { inclusive = true }
                     }
                 }
             )
+        }
+
+        // Admin routes
+        composable(NavRoutes.AdminDashboard.route) {
+            AdminDashboardScreen(navController = navController)
+        }
+
+        composable(NavRoutes.AdminAttendance.route) {
+            AdminAttendanceScreen(navController = navController)
+        }
+
+        composable(NavRoutes.AdminExport.route) {
+            AdminExportScreen(navController = navController)
         }
     }
 }

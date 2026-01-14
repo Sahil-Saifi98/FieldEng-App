@@ -29,6 +29,9 @@ class LoginViewModel(application: Application) : AndroidViewModel(application) {
     private val _loginSuccess = MutableStateFlow(false)
     val loginSuccess: StateFlow<Boolean> = _loginSuccess
 
+    private val _isAdmin = MutableStateFlow(false)
+    val isAdmin: StateFlow<Boolean> = _isAdmin
+
     fun onEmployeeIdChange(value: String) {
         _employeeId.value = value
         _errorMessage.value = null
@@ -69,6 +72,7 @@ class LoginViewModel(application: Application) : AndroidViewModel(application) {
                             role = authResponse.user.role
                         )
 
+                        _isAdmin.value = authResponse.user.role == "admin"
                         _loginSuccess.value = true
                     } else {
                         _errorMessage.value = authResponse.message ?: "Login failed"
