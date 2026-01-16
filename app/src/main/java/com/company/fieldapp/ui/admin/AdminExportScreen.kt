@@ -634,7 +634,3 @@ fun QuickExportCard(
     }
 }
 
-data class ExportStatus(
-    val isSuccess: Boolean,
-    val message: String
-)

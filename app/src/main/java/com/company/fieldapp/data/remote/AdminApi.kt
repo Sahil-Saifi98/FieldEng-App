@@ -1,5 +1,7 @@
 package com.company.fieldapp.data.remote
 
+import okhttp3.RequestBody
+import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.*
 
@@ -103,4 +105,39 @@ interface AdminApi {
     suspend fun toggleUserActive(
         @Path("id") userId: String
     ): Response<AuthResponse>
+
+    // Export endpoints that return files
+    @Streaming
+    @POST("admin/export/user/{userId}")
+    suspend fun exportUserDataZip(
+        @Path("userId") userId: String,
+        @Body requestBody: RequestBody
+    ): Response<ResponseBody>
+
+    @Streaming
+    @POST("admin/export/all")
+    suspend fun exportAllDataZip(
+        @Body requestBody: RequestBody
+    ): Response<ResponseBody>
+
+    @Streaming
+    @GET("admin/export/attendance/csv")
+    suspend fun exportAttendanceCSV(
+        @Query("startDate") startDate: String? = null,
+        @Query("endDate") endDate: String? = null
+    ): Response<ResponseBody>
+
+    @Streaming
+    @GET("admin/export/attendance/pdf")
+    suspend fun exportAttendancePDF(
+        @Query("startDate") startDate: String? = null,
+        @Query("endDate") endDate: String? = null
+    ): Response<ResponseBody>
+
+    @Streaming
+    @GET("admin/export/attendance/json")
+    suspend fun exportAttendanceJSON(
+        @Query("startDate") startDate: String? = null,
+        @Query("endDate") endDate: String? = null
+    ): Response<ResponseBody>
 }

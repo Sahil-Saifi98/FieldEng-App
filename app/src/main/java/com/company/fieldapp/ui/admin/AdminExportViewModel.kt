@@ -1,18 +1,31 @@
 package com.company.fieldapp.ui.admin
 
 import android.app.Application
+import android.app.DownloadManager
+import android.content.ContentValues
+import android.content.Context
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
+import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.company.fieldapp.data.remote.AdminUser
 import com.company.fieldapp.data.remote.RetrofitClient
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import org.json.JSONArray
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.ResponseBody
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -63,6 +76,7 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                 }
             } catch (e: Exception) {
                 Log.e("AdminExportVM", "Error loading users: ${e.message}", e)
+                showToast("Failed to load users: ${e.message}")
             }
         }
     }
@@ -90,67 +104,69 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
             _exportStatus.value = null
 
             try {
-                // Get user's attendance data with date range
-                val response = RetrofitClient.adminApi.getUserAttendance(user._id)
+                Log.d("AdminExportVM", "Starting export for user: ${user.employeeId}")
+
+                // Create request body with date range
+                val jsonBody = JSONObject().apply {
+                    _startDate.value?.let { put("startDate", it) }
+                    _endDate.value?.let { put("endDate", it) }
+                }
+                val requestBody = jsonBody.toString()
+                    .toRequestBody("application/json".toMediaTypeOrNull())
+
+                // Make API call to export user data
+                val response = RetrofitClient.adminApi.exportUserDataZip(user._id, requestBody)
+
+                Log.d("AdminExportVM", "Response code: ${response.code()}")
 
                 if (response.isSuccessful && response.body() != null) {
-                    var attendanceData = response.body()!!.data
+                    val fileName = "${user.employeeId}_export_${System.currentTimeMillis()}.zip"
 
-                    // Filter by date range if specified
-                    if (_startDate.value != null && _endDate.value != null) {
-                        attendanceData = attendanceData.filter { attendance ->
-                            attendance.date >= _startDate.value!! && attendance.date <= _endDate.value!!
-                        }
+                    // Save to Downloads folder
+                    val savedFile = saveToDownloads(response.body()!!, fileName)
+
+                    if (savedFile != null) {
+                        _exportStatus.value = ExportStatus(
+                            isSuccess = true,
+                            message = "✅ Downloaded to Downloads folder: $fileName"
+                        )
+                        showToast("File downloaded successfully!")
+                        Log.d("AdminExportVM", "Exported user data: $savedFile")
+                    } else {
+                        _exportStatus.value = ExportStatus(
+                            isSuccess = false,
+                            message = "Failed to save export file"
+                        )
+                        showToast("Failed to save file")
                     }
-
-                    // Create JSON file
-                    val jsonData = JSONObject().apply {
-                        put("user", JSONObject().apply {
-                            put("employeeId", user.employeeId)
-                            put("name", user.name)
-                            put("email", user.email)
-                            put("department", user.department)
-                            put("designation", user.designation)
-                        })
-                        put("dateRange", JSONObject().apply {
-                            put("startDate", _startDate.value ?: "All")
-                            put("endDate", _endDate.value ?: "All")
-                        })
-                        put("totalRecords", attendanceData.size)
-                        put("attendance", JSONArray().apply {
-                            attendanceData.forEach { attendance ->
-                                put(JSONObject().apply {
-                                    put("date", attendance.date)
-                                    put("checkInTime", attendance.checkInTime)
-                                    put("latitude", attendance.latitude)
-                                    put("longitude", attendance.longitude)
-                                    put("selfieUrl", attendance.selfieUrl ?: attendance.selfiePath)
-                                })
-                            }
-                        })
-                        put("exportDate", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
-                    }
-
-                    // Save to file
-                    val fileName = "${user.employeeId}_${System.currentTimeMillis()}.json"
-                    val file = saveToDownloads(fileName, jsonData.toString())
-
-                    _exportStatus.value = ExportStatus(
-                        isSuccess = true,
-                        message = "✓ Exported ${attendanceData.size} records to ${file.name}"
-                    )
-                    Log.d("AdminExportVM", "Exported data for user ${user.employeeId}")
                 } else {
+                    val errorMsg = when (response.code()) {
+                        502 -> "Server gateway error. Please try with a smaller date range."
+                        503 -> "Service temporarily unavailable. Please try again."
+                        504 -> "Request timeout. Try exporting fewer records."
+                        else -> "Failed to export: ${response.code()}"
+                    }
+
                     _exportStatus.value = ExportStatus(
                         isSuccess = false,
-                        message = "Failed to fetch user data"
+                        message = errorMsg
                     )
+                    showToast(errorMsg)
                 }
             } catch (e: Exception) {
+                val errorMsg = when {
+                    e.message?.contains("timeout") == true ->
+                        "Request timeout. Try a smaller date range."
+                    e.message?.contains("Unable to resolve host") == true ->
+                        "Network error. Check your connection."
+                    else -> "Error: ${e.message}"
+                }
+
                 _exportStatus.value = ExportStatus(
                     isSuccess = false,
-                    message = "Error: ${e.message}"
+                    message = errorMsg
                 )
+                showToast(errorMsg)
                 Log.e("AdminExportVM", "Export error: ${e.message}", e)
             } finally {
                 _isLoading.value = false
@@ -164,54 +180,47 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
             _exportStatus.value = null
 
             try {
-                val response = RetrofitClient.adminApi.getAllAttendance(
-                    _startDate.value,
-                    _endDate.value
-                )
+                val jsonBody = JSONObject().apply {
+                    _startDate.value?.let { put("startDate", it) }
+                    _endDate.value?.let { put("endDate", it) }
+                }
+                val requestBody = jsonBody.toString()
+                    .toRequestBody("application/json".toMediaTypeOrNull())
+
+                val response = RetrofitClient.adminApi.exportAllDataZip(requestBody)
 
                 if (response.isSuccessful && response.body() != null) {
-                    val allData = response.body()!!.data
+                    val fileName = "all_data_export_${System.currentTimeMillis()}.zip"
+                    val savedFile = saveToDownloads(response.body()!!, fileName)
 
-                    val jsonData = JSONObject().apply {
-                        put("dateRange", JSONObject().apply {
-                            put("startDate", _startDate.value ?: "All")
-                            put("endDate", _endDate.value ?: "All")
-                        })
-                        put("exportDate", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date()))
-                        put("totalRecords", allData.size)
-                        put("attendance", JSONArray().apply {
-                            allData.forEach { attendance ->
-                                put(JSONObject().apply {
-                                    put("employeeId", attendance.employeeId)
-                                    put("employeeName", attendance.userName)
-                                    put("date", attendance.date)
-                                    put("checkInTime", attendance.checkInTime)
-                                    put("latitude", attendance.latitude)
-                                    put("longitude", attendance.longitude)
-                                    put("selfieUrl", attendance.selfieUrl ?: attendance.selfiePath)
-                                })
-                            }
-                        })
+                    if (savedFile != null) {
+                        _exportStatus.value = ExportStatus(
+                            isSuccess = true,
+                            message = "✅ Downloaded to Downloads: $fileName"
+                        )
+                        showToast("File downloaded successfully!")
+                    } else {
+                        _exportStatus.value = ExportStatus(
+                            isSuccess = false,
+                            message = "Failed to save export file"
+                        )
                     }
-
-                    val fileName = "all_data_${System.currentTimeMillis()}.json"
-                    val file = saveToDownloads(fileName, jsonData.toString())
-
-                    _exportStatus.value = ExportStatus(
-                        isSuccess = true,
-                        message = "✓ Exported ${allData.size} records to ${file.name}"
-                    )
                 } else {
-                    _exportStatus.value = ExportStatus(
-                        isSuccess = false,
-                        message = "Failed to fetch data"
-                    )
+                    val errorMsg = when (response.code()) {
+                        502 -> "Server gateway error. Try a smaller date range."
+                        503 -> "Service unavailable. Please try again."
+                        504 -> "Timeout. Try exporting fewer records."
+                        else -> "Export failed: ${response.code()}"
+                    }
+                    _exportStatus.value = ExportStatus(isSuccess = false, message = errorMsg)
+                    showToast(errorMsg)
                 }
             } catch (e: Exception) {
                 _exportStatus.value = ExportStatus(
                     isSuccess = false,
                     message = "Error: ${e.message}"
                 )
+                showToast("Export failed: ${e.message}")
                 Log.e("AdminExportVM", "Export all error: ${e.message}", e)
             } finally {
                 _isLoading.value = false
@@ -225,34 +234,45 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
             _exportStatus.value = null
 
             try {
-                val response = RetrofitClient.adminApi.getAllAttendance(
-                    _startDate.value,
-                    _endDate.value
-                )
+                val response = when (format) {
+                    "csv" -> RetrofitClient.adminApi.exportAttendanceCSV(
+                        _startDate.value,
+                        _endDate.value
+                    )
+                    "pdf" -> RetrofitClient.adminApi.exportAttendancePDF(
+                        _startDate.value,
+                        _endDate.value
+                    )
+                    else -> {
+                        _exportStatus.value = ExportStatus(
+                            isSuccess = false,
+                            message = "Unsupported format: $format"
+                        )
+                        _isLoading.value = false
+                        return@launch
+                    }
+                }
 
                 if (response.isSuccessful && response.body() != null) {
-                    val data = response.body()!!.data
-
-                    val content = when (format) {
-                        "json" -> convertToJson(data)
-                        "csv" -> convertAttendanceToCSV(data)
-                        "pdf" -> {
-                            _exportStatus.value = ExportStatus(
-                                isSuccess = false,
-                                message = "PDF export will be implemented soon"
-                            )
-                            _isLoading.value = false
-                            return@launch
-                        }
-                        else -> convertToJson(data)
-                    }
-
                     val fileName = "attendance_${System.currentTimeMillis()}.$format"
-                    val file = saveToDownloads(fileName, content)
+                    val savedFile = saveToDownloads(response.body()!!, fileName)
 
+                    if (savedFile != null) {
+                        _exportStatus.value = ExportStatus(
+                            isSuccess = true,
+                            message = "✅ Downloaded: $fileName"
+                        )
+                        showToast("Downloaded successfully!")
+                    } else {
+                        _exportStatus.value = ExportStatus(
+                            isSuccess = false,
+                            message = "Failed to save file"
+                        )
+                    }
+                } else {
                     _exportStatus.value = ExportStatus(
-                        isSuccess = true,
-                        message = "✓ Exported ${data.size} attendance records as $format"
+                        isSuccess = false,
+                        message = "Export failed: ${response.code()}"
                     )
                 }
             } catch (e: Exception) {
@@ -260,6 +280,7 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                     isSuccess = false,
                     message = "Error: ${e.message}"
                 )
+                Log.e("AdminExportVM", "Export attendance error: ${e.message}", e)
             } finally {
                 _isLoading.value = false
             }
@@ -280,48 +301,109 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
         )
     }
 
-    private fun convertToJson(data: List<com.company.fieldapp.data.remote.AdminAttendanceItem>): String {
-        val jsonArray = JSONArray()
-        data.forEach { item ->
-            jsonArray.put(JSONObject().apply {
-                put("employeeId", item.employeeId)
-                put("employeeName", item.userName)
-                put("date", item.date)
-                put("checkInTime", item.checkInTime)
-                put("latitude", item.latitude)
-                put("longitude", item.longitude)
-                put("selfieUrl", item.selfieUrl ?: item.selfiePath)
-            })
+    /**
+     * Save file to public Downloads folder (Android 10+)
+     */
+    private suspend fun saveToDownloads(body: ResponseBody, fileName: String): String? {
+        return withContext(Dispatchers.IO) {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    // Use MediaStore for Android 10+
+                    val contentValues = ContentValues().apply {
+                        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                        put(MediaStore.MediaColumns.MIME_TYPE, getMimeType(fileName))
+                        put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                    }
+
+                    val resolver = context.contentResolver
+                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+
+                    uri?.let {
+                        resolver.openOutputStream(it)?.use { outputStream ->
+                            writeResponseBodyToStream(body, outputStream)
+                        }
+                        Log.d("AdminExportVM", "File saved via MediaStore: $uri")
+                        fileName
+                    }
+                } else {
+                    // For Android 9 and below
+                    val downloadsDir = Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS
+                    )
+
+                    if (!downloadsDir.exists()) {
+                        downloadsDir.mkdirs()
+                    }
+
+                    val file = File(downloadsDir, fileName)
+                    FileOutputStream(file).use { outputStream ->
+                        writeResponseBodyToStream(body, outputStream)
+                    }
+
+                    // Notify download manager
+                    notifyDownloadManager(file, fileName)
+
+                    Log.d("AdminExportVM", "File saved: ${file.absolutePath}")
+                    file.absolutePath
+                }
+            } catch (e: Exception) {
+                Log.e("AdminExportVM", "Error saving to downloads: ${e.message}", e)
+                null
+            }
         }
-        return jsonArray.toString(2)
     }
 
-    private fun convertAttendanceToCSV(data: List<com.company.fieldapp.data.remote.AdminAttendanceItem>): String {
-        val csv = StringBuilder()
-        csv.append("Employee ID,Employee Name,Date,Check-in Time,Latitude,Longitude,Selfie URL\n")
-        data.forEach { item ->
-            csv.append("\"${item.employeeId}\",")
-            csv.append("\"${item.userName ?: ""}\",")
-            csv.append("\"${item.date}\",")
-            csv.append("\"${item.checkInTime}\",")
-            csv.append("${item.latitude},")
-            csv.append("${item.longitude},")
-            csv.append("\"${item.selfieUrl ?: item.selfiePath}\"\n")
+    private fun writeResponseBodyToStream(body: ResponseBody, outputStream: OutputStream) {
+        body.byteStream().use { inputStream ->
+            val buffer = ByteArray(8192) // Larger buffer for better performance
+            var bytesRead: Int
+            var totalBytes = 0L
+
+            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                outputStream.write(buffer, 0, bytesRead)
+                totalBytes += bytesRead
+            }
+
+            outputStream.flush()
+            Log.d("AdminExportVM", "Wrote $totalBytes bytes to file")
         }
-        return csv.toString()
     }
 
-    private fun saveToDownloads(fileName: String, content: String): File {
-        val downloadsDir = File(context.getExternalFilesDir(null), "Downloads")
-        if (!downloadsDir.exists()) {
-            downloadsDir.mkdirs()
+    private fun notifyDownloadManager(file: File, fileName: String) {
+        try {
+            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            downloadManager.addCompletedDownload(
+                fileName,
+                "FieldApp Export",
+                true,
+                getMimeType(fileName),
+                file.absolutePath,
+                file.length(),
+                true
+            )
+        } catch (e: Exception) {
+            Log.e("AdminExportVM", "Error notifying download manager: ${e.message}")
         }
+    }
 
-        val file = File(downloadsDir, fileName)
-        FileOutputStream(file).use { fos ->
-            fos.write(content.toByteArray())
+    private fun getMimeType(fileName: String): String {
+        return when {
+            fileName.endsWith(".zip") -> "application/zip"
+            fileName.endsWith(".pdf") -> "application/pdf"
+            fileName.endsWith(".csv") -> "text/csv"
+            fileName.endsWith(".json") -> "application/json"
+            else -> "application/octet-stream"
         }
+    }
 
-        return file
+    private fun showToast(message: String) {
+        viewModelScope.launch(Dispatchers.Main) {
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        }
     }
 }
+
+data class ExportStatus(
+    val isSuccess: Boolean,
+    val message: String
+)
