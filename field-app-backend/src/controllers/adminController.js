@@ -16,7 +16,8 @@ async function downloadImage(url, filepath) {
     const response = await axios({
       method: 'GET',
       url: url,
-      responseType: 'stream'
+      responseType: 'stream',
+      timeout: 30000
     });
     
     const writer = fs.createWriteStream(filepath);
@@ -237,16 +238,16 @@ exports.exportUserData = async (req, res) => {
     const { startDate, endDate } = req.body;
     const userId = req.params.userId;
 
-    // Set timeout to 5 minutes for large exports
-    req.setTimeout(300000);
+    console.log('Export request:', { userId, startDate, endDate });
 
-    // Create temp directory
+    req.setTimeout(600000);
+    res.setTimeout(600000);
+
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
     fs.mkdirSync(userTempDir, { recursive: true });
 
-    // Get user data
     const user = await User.findById(userId).select('-password');
     if (!user) {
       return res.status(404).json({
@@ -255,60 +256,63 @@ exports.exportUserData = async (req, res) => {
       });
     }
 
-    // Get attendance data
     let query = { userId: userId };
     if (startDate && endDate) {
-      query.date = { $gte: startDate, $lte: endDate };
+      query.date = {
+        $gte: startDate,
+        $lte: endDate
+      };
     }
 
+    console.log('Query:', JSON.stringify(query));
+
     const attendance = await Attendance.find(query)
-      .sort({ timestamp: -1 })
-      .limit(500); // Limit to prevent memory issues
+      .sort({ date: -1, timestamp: -1 })
+      .limit(1000);
 
-    console.log(`Exporting ${attendance.length} attendance records for user ${user.employeeId}`);
+    console.log(`Found ${attendance.length} attendance records for export`);
 
-    // Create CSV content
-    let csvContent = 'Date,Check-in Time,Latitude,Longitude,Selfie URL\n';
+    if (attendance.length === 0) {
+      fs.rmSync(userTempDir, { recursive: true, force: true });
+      return res.status(404).json({
+        success: false,
+        message: 'No attendance records found for the selected date range'
+      });
+    }
+
+    let csvContent = 'Date,Check-in Time,Latitude,Longitude,Selfie Filename\n';
     
-    // Download selfies directory
     const selfiesDir = path.join(userTempDir, 'selfies');
     fs.mkdirSync(selfiesDir, { recursive: true });
 
-    // Download selfies with error handling and limits
-    const downloadPromises = [];
-    const maxConcurrent = 5; // Download max 5 images at a time
+    const maxConcurrent = 3;
+    let downloadCount = 0;
     
     for (let i = 0; i < attendance.length; i++) {
       const att = attendance[i];
       const filename = `selfie_${att.date}_${att.checkInTime.replace(/:/g, '-')}.jpg`;
       const filepath = path.join(selfiesDir, filename);
 
-      // Add to CSV with URL reference
-      csvContent += `"${att.date}","${att.checkInTime}",${att.latitude},${att.longitude},"${att.selfiePath}"\n`;
+      csvContent += `"${att.date}","${att.checkInTime}",${att.latitude},${att.longitude},"selfies/${filename}"\n`;
 
-      // Download selfie if URL exists
-      if (att.selfiePath) {
-        const downloadTask = downloadImage(att.selfiePath, filepath)
-          .catch(err => {
-            console.error(`Failed to download ${filename}:`, err.message);
-            return false;
-          });
-        
-        downloadPromises.push(downloadTask);
-
-        // Process in batches to avoid overwhelming the server
-        if (downloadPromises.length >= maxConcurrent || i === attendance.length - 1) {
-          await Promise.all(downloadPromises);
-          downloadPromises.length = 0; // Clear array
+      if (att.selfiePath && (i < 100 || i % 5 === 0)) {
+        if (downloadCount < maxConcurrent) {
+          downloadImage(att.selfiePath, filepath).catch(err => 
+            console.error(`Failed to download ${filename}:`, err.message)
+          );
+          downloadCount++;
+        } else {
+          await downloadImage(att.selfiePath, filepath);
+          downloadCount = 0;
         }
       }
     }
 
-    // Save CSV file
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
     const csvPath = path.join(userTempDir, `${user.employeeId}_attendance.csv`);
     fs.writeFileSync(csvPath, csvContent);
 
-    // Save user info JSON
     const userInfoPath = path.join(userTempDir, 'user_info.json');
     fs.writeFileSync(userInfoPath, JSON.stringify({
       employeeId: user.employeeId,
@@ -324,58 +328,55 @@ exports.exportUserData = async (req, res) => {
       exportDate: new Date().toISOString()
     }, null, 2));
 
-    // Create ZIP archive
-    const archive = archiver('zip', { 
-      zlib: { level: 6 } // Reduce compression level for faster processing
-    });
-    
+    const archive = archiver('zip', { zlib: { level: 5 } });
     const zipFilename = `${user.employeeId}_export_${Date.now()}.zip`;
 
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
     res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Transfer-Encoding', 'chunked');
 
-    // Handle archive errors
     archive.on('error', (err) => {
       console.error('Archive error:', err);
-      throw err;
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, message: err.message });
+      }
+      setTimeout(() => {
+        if (fs.existsSync(userTempDir)) {
+          fs.rmSync(userTempDir, { recursive: true, force: true });
+        }
+      }, 1000);
     });
 
     archive.on('warning', (err) => {
-      if (err.code === 'ENOENT') {
+      if (err.code !== 'ENOENT') {
         console.warn('Archive warning:', err);
-      } else {
-        throw err;
       }
     });
 
-    // Pipe archive to response
     archive.pipe(res);
-
-    // Add all files to ZIP
     archive.directory(userTempDir, false);
 
-    // Finalize archive
     await archive.finalize();
 
-    console.log(`âœ… Export completed: ${zipFilename}`);
+    console.log(`✅ Export completed: ${zipFilename}, size: ${archive.pointer()} bytes`);
 
-    // Cleanup temp directory after a delay
-    setTimeout(() => {
-      try {
-        if (fs.existsSync(userTempDir)) {
-          fs.rmSync(userTempDir, { recursive: true, force: true });
-          console.log(`Cleaned up temp directory: ${userTempDir}`);
+    res.on('finish', () => {
+      setTimeout(() => {
+        try {
+          if (fs.existsSync(userTempDir)) {
+            fs.rmSync(userTempDir, { recursive: true, force: true });
+            console.log(`Cleaned up: ${userTempDir}`);
+          }
+        } catch (cleanupErr) {
+          console.error('Cleanup error:', cleanupErr);
         }
-      } catch (cleanupErr) {
-        console.error('Cleanup error:', cleanupErr);
-      }
-    }, 5000); // Wait 5 seconds before cleanup
+      }, 2000);
+    });
 
   } catch (error) {
-    console.error('âŒ Export user data error:', error);
+    console.error('❌ Export user data error:', error);
     
-    // Cleanup on error
     try {
       if (fs.existsSync(userTempDir)) {
         fs.rmSync(userTempDir, { recursive: true, force: true });
@@ -384,7 +385,6 @@ exports.exportUserData = async (req, res) => {
       console.error('Cleanup error:', cleanupErr);
     }
 
-    // Send error response if headers not sent
     if (!res.headersSent) {
       res.status(500).json({
         success: false,
@@ -404,30 +404,41 @@ exports.exportAllData = async (req, res) => {
   try {
     const { startDate, endDate } = req.body;
 
-    // Set longer timeout for large exports
-    req.setTimeout(300000);
+    console.log('Export all request:', { startDate, endDate });
 
-    // Create temp directory
+    req.setTimeout(600000);
+    res.setTimeout(600000);
+
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
     }
     fs.mkdirSync(exportTempDir, { recursive: true });
 
-    // Build query
     let query = {};
     if (startDate && endDate) {
-      query.date = { $gte: startDate, $lte: endDate };
+      query.date = {
+        $gte: startDate,
+        $lte: endDate
+      };
     }
 
-    // Get all attendance with user data (limit to prevent memory issues)
+    console.log('Query:', JSON.stringify(query));
+
     const attendance = await Attendance.find(query)
       .populate('userId', 'name employeeId email department designation')
-      .sort({ timestamp: -1 })
-      .limit(1000); // Limit records
+      .sort({ date: -1, timestamp: -1 })
+      .limit(2000);
 
-    console.log(`Exporting ${attendance.length} total attendance records`);
+    console.log(`Found ${attendance.length} total records for export`);
 
-    // Create CSV content
+    if (attendance.length === 0) {
+      fs.rmSync(exportTempDir, { recursive: true, force: true });
+      return res.status(404).json({
+        success: false,
+        message: 'No attendance records found for the selected date range'
+      });
+    }
+
     let csvContent = 'Employee ID,Employee Name,Department,Designation,Date,Check-in Time,Latitude,Longitude,Selfie URL\n';
     
     attendance.forEach(att => {
@@ -442,11 +453,9 @@ exports.exportAllData = async (req, res) => {
       csvContent += `"${att.selfiePath}"\n`;
     });
 
-    // Save CSV
     const csvPath = path.join(exportTempDir, 'all_attendance.csv');
     fs.writeFileSync(csvPath, csvContent);
 
-    // Save summary JSON
     const summaryPath = path.join(exportTempDir, 'summary.json');
     fs.writeFileSync(summaryPath, JSON.stringify({
       dateRange: {
@@ -454,12 +463,10 @@ exports.exportAllData = async (req, res) => {
         endDate: endDate || 'All'
       },
       totalRecords: attendance.length,
-      exportDate: new Date().toISOString(),
-      note: 'Selfie images are referenced by URL in the CSV file. For offline access, use individual user export.'
+      exportDate: new Date().toISOString()
     }, null, 2));
 
-    // Create ZIP
-    const archive = archiver('zip', { zlib: { level: 6 } });
+    const archive = archiver('zip', { zlib: { level: 5 } });
     const zipFilename = `all_data_export_${Date.now()}.zip`;
 
     res.setHeader('Content-Type', 'application/zip');
@@ -468,7 +475,9 @@ exports.exportAllData = async (req, res) => {
 
     archive.on('error', (err) => {
       console.error('Archive error:', err);
-      throw err;
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, message: err.message });
+      }
     });
 
     archive.pipe(res);
@@ -476,21 +485,22 @@ exports.exportAllData = async (req, res) => {
 
     await archive.finalize();
 
-    console.log(`âœ… Export all completed: ${zipFilename}`);
+    console.log(`✅ Export all completed: ${zipFilename}`);
 
-    // Cleanup
-    setTimeout(() => {
-      try {
-        if (fs.existsSync(exportTempDir)) {
-          fs.rmSync(exportTempDir, { recursive: true, force: true });
+    res.on('finish', () => {
+      setTimeout(() => {
+        try {
+          if (fs.existsSync(exportTempDir)) {
+            fs.rmSync(exportTempDir, { recursive: true, force: true });
+          }
+        } catch (cleanupErr) {
+          console.error('Cleanup error:', cleanupErr);
         }
-      } catch (cleanupErr) {
-        console.error('Cleanup error:', cleanupErr);
-      }
-    }, 5000);
+      }, 2000);
+    });
 
   } catch (error) {
-    console.error('âŒ Export all data error:', error);
+    console.error('❌ Export all data error:', error);
     
     try {
       if (fs.existsSync(exportTempDir)) {
@@ -516,6 +526,8 @@ exports.exportAttendanceCSV = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
 
+    console.log('CSV Export:', { startDate, endDate });
+
     let query = {};
     if (startDate && endDate) {
       query.date = { $gte: startDate, $lte: endDate };
@@ -523,9 +535,11 @@ exports.exportAttendanceCSV = async (req, res) => {
 
     const attendance = await Attendance.find(query)
       .populate('userId', 'name employeeId department designation')
-      .sort({ timestamp: -1 });
+      .sort({ date: -1, timestamp: -1 })
+      .limit(5000);
 
-    // Create CSV content
+    console.log(`Exporting ${attendance.length} records as CSV`);
+
     let csv = 'Employee ID,Employee Name,Department,Designation,Date,Check-in Time,Latitude,Longitude,Selfie URL\n';
     
     attendance.forEach(att => {
@@ -540,10 +554,12 @@ exports.exportAttendanceCSV = async (req, res) => {
       csv += `"${att.selfiePath}"\n`;
     });
 
-    // Set headers for CSV download
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename=attendance_${Date.now()}.csv`);
+    const filename = `attendance_${startDate || 'all'}_to_${endDate || 'all'}_${Date.now()}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.status(200).send(csv);
+
+    console.log(`✅ CSV exported: ${filename}`);
   } catch (error) {
     console.error('Export CSV error:', error);
     res.status(500).json({
@@ -560,6 +576,8 @@ exports.exportAttendancePDF = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
 
+    console.log('PDF Export:', { startDate, endDate });
+
     let query = {};
     if (startDate && endDate) {
       query.date = { $gte: startDate, $lte: endDate };
@@ -567,33 +585,35 @@ exports.exportAttendancePDF = async (req, res) => {
 
     const attendance = await Attendance.find(query)
       .populate('userId', 'name employeeId department designation')
-      .sort({ timestamp: -1 });
+      .sort({ date: -1, timestamp: -1 })
+      .limit(1000);
 
-    // Create PDF
-    const doc = new PDFDocument({ margin: 50, size: 'A4' });
-    const filename = `attendance_${Date.now()}.pdf`;
+    console.log(`Exporting ${attendance.length} records as PDF`);
+
+    const doc = new PDFDocument({ 
+      margin: 50, 
+      size: 'A4',
+      bufferPages: true
+    });
+    
+    const filename = `attendance_${startDate || 'all'}_to_${endDate || 'all'}_${Date.now()}.pdf`;
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
     doc.pipe(res);
 
-    // Title
     doc.fontSize(20).text('Attendance Report', { align: 'center' });
     doc.moveDown();
     
-    // Date range
     doc.fontSize(12).text(`Date Range: ${startDate || 'All'} to ${endDate || 'All'}`, { align: 'center' });
     doc.fontSize(12).text(`Total Records: ${attendance.length}`, { align: 'center' });
     doc.fontSize(10).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
     doc.moveDown(2);
 
-    // Table headers
-    const tableTop = doc.y;
     const rowHeight = 25;
-    let currentY = tableTop;
+    let currentY = doc.y;
 
-    // Draw header
     doc.fontSize(8).font('Helvetica-Bold');
     doc.text('Emp ID', 50, currentY, { width: 60 });
     doc.text('Name', 110, currentY, { width: 100 });
@@ -604,14 +624,12 @@ exports.exportAttendancePDF = async (req, res) => {
     currentY += rowHeight;
     doc.moveTo(50, currentY - 5).lineTo(550, currentY - 5).stroke();
 
-    // Data rows
     doc.font('Helvetica');
     attendance.forEach((att, index) => {
       if (currentY > 700) {
         doc.addPage();
         currentY = 50;
         
-        // Redraw header on new page
         doc.font('Helvetica-Bold').fontSize(8);
         doc.text('Emp ID', 50, currentY, { width: 60 });
         doc.text('Name', 110, currentY, { width: 100 });
@@ -632,7 +650,6 @@ exports.exportAttendancePDF = async (req, res) => {
       
       currentY += rowHeight;
       
-      // Light separator line
       if (index < attendance.length - 1) {
         doc.moveTo(50, currentY - 2).lineTo(550, currentY - 2).stroke('#CCCCCC');
       }
@@ -640,12 +657,16 @@ exports.exportAttendancePDF = async (req, res) => {
 
     doc.end();
 
+    console.log(`✅ PDF exported: ${filename}`);
+
   } catch (error) {
     console.error('Export PDF error:', error);
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: error.message
+      });
+    }
   }
 };
 
@@ -663,7 +684,8 @@ exports.exportAttendanceJSON = async (req, res) => {
 
     const attendance = await Attendance.find(query)
       .populate('userId', 'name employeeId department designation')
-      .sort({ timestamp: -1 });
+      .sort({ date: -1, timestamp: -1 })
+      .limit(5000);
 
     const exportData = {
       exportDate: new Date().toISOString(),
@@ -686,9 +708,9 @@ exports.exportAttendanceJSON = async (req, res) => {
       }))
     };
 
-    // Set headers for JSON download
+    const filename = `attendance_${Date.now()}.json`;
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename=attendance_${Date.now()}.json`);
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.status(200).json(exportData);
   } catch (error) {
     console.error('Export JSON error:', error);

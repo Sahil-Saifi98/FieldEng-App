@@ -5,7 +5,6 @@ const path = require('path');
 const connectDB = require('./config/database');
 const { initSecondaryConnection } = require('./config/dbSync');
 
-
 // Load environment variables
 dotenv.config();
 
@@ -18,10 +17,17 @@ initSecondaryConnection();
 // Initialize express app
 const app = express();
 
+// CRITICAL: Increase timeouts globally for large file exports
+app.use((req, res, next) => {
+  req.setTimeout(600000); // 10 minutes
+  res.setTimeout(600000); // 10 minutes
+  next();
+});
+
 // Middleware
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' })); // Increase JSON payload limit
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Serve static files (uploaded images)
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
@@ -55,22 +61,23 @@ app.use((req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error('Error:', err.stack);
   res.status(500).json({
     success: false,
     message: err.message || 'Server Error'
   });
 });
 
-app.use((req, res, next) => {
-  req.setTimeout(300000); // 5 minutes
-  res.setTimeout(300000); // 5 minutes
-  next();
-});
-
 // Start server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📡 Environment: ${process.env.NODE_ENV}`);
+  console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
+
+// Set server timeouts
+server.timeout = 600000; // 10 minutes
+server.keepAliveTimeout = 610000; // Slightly more than timeout
+server.headersTimeout = 620000; // Slightly more than keepAliveTimeout
+
+module.exports = app;
