@@ -10,6 +10,7 @@ const {
   exportUserData,
   exportAllData,
   exportAttendanceCSV,
+  exportAttendancePDF,
   exportAttendanceJSON
 } = require('../controllers/adminController');
 const { protect, authorize } = require('../middleware/auth');
@@ -34,6 +35,7 @@ router.get('/stats', getAdminStats);
 router.post('/export/user/:userId', exportUserData);
 router.post('/export/all', exportAllData);
 router.get('/export/attendance/csv', exportAttendanceCSV);
+router.get('/export/attendance/pdf', exportAttendancePDF);
 router.get('/export/attendance/json', exportAttendanceJSON);
 
 module.exports = router;
