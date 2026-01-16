@@ -647,108 +647,68 @@ exports.exportAttendancePDF = async (req, res) => {
     doc.pipe(res);
 
     // Add logo if available
-    const logoPath = path.join(__dirname, '../assets/logo.jpeg.jpeg');
-    let startY = 45;
-    
+    const logoPath = path.join(__dirname, '../backend/assets/logo.jpeg');
     if (fs.existsSync(logoPath)) {
-      try {
-        doc.image(logoPath, 50, 45, { width: 120, height: 60 });
-        // Add company info next to logo
-        doc.fontSize(22).font('Helvetica-Bold').text('Attendance Report', 180, 50);
-        doc.fontSize(10).font('Helvetica').text('Field App Management System', 180, 75);
-        startY = 120;
-      } catch (err) {
-        console.error('Error loading logo:', err);
-        startY = 45;
-      }
-    } else {
-      doc.fontSize(22).font('Helvetica-Bold').text('Attendance Report', { align: 'center' });
-      startY = 70;
+      doc.image(logoPath, 50, 45, { width: 100 });
     }
-    
-    doc.moveDown();
-    
-    // Add horizontal line
-    doc.moveTo(50, startY).lineTo(550, startY).stroke();
-    doc.moveDown();
-    
-    // Report details box
-    const boxY = doc.y + 10;
-    doc.rect(50, boxY, 500, 80).fillAndStroke('#f5f5f5', '#cccccc');
-    
-    doc.fillColor('#000000')
-       .fontSize(11)
-       .font('Helvetica-Bold')
-       .text('Report Details', 70, boxY + 15);
-    
-    doc.fontSize(10)
-       .font('Helvetica')
-       .text(`Date Range: ${startDate || 'All'} to ${endDate || 'All'}`, 70, boxY + 35)
-       .text(`Total Records: ${attendance.length}`, 70, boxY + 50)
-       .text(`Generated: ${convertToIST(new Date()).format('YYYY-MM-DD HH:mm:ss IST')}`, 70, boxY + 65);
-    
-    doc.moveDown(4);
 
-    const rowHeight = 25;
-    let currentY = doc.y + 10;
+    doc.fontSize(20).text('Attendance Report', 200, 57, { align: 'center' });
+    doc.moveDown();
+    
+    doc.fontSize(12).text(`Date Range: ${startDate || 'All'} to ${endDate || 'All'}`, { align: 'center' });
+    doc.fontSize(12).text(`Total Records: ${attendance.length}`, { align: 'center' });
+    doc.fontSize(10).text(`Generated: ${convertToIST(new Date()).format('YYYY-MM-DD HH:mm:ss IST')}`, { align: 'center' });
+    doc.moveDown(2);
+
+    const rowHeight = 30;
+    let currentY = doc.y;
 
     // Header
-    doc.fontSize(9).font('Helvetica-Bold');
-    doc.rect(50, currentY - 5, 500, 25).fillAndStroke('#FF6B35', '#FF6B35');
-    doc.fillColor('#FFFFFF');
-    doc.text('Emp ID', 55, currentY, { width: 55 });
-    doc.text('Name', 115, currentY, { width: 90 });
-    doc.text('Date', 210, currentY, { width: 68 });
-    doc.text('Time (IST)', 283, currentY, { width: 65 });
-    doc.text('Location', 353, currentY, { width: 120 });
+    doc.fontSize(8).font('Helvetica-Bold');
+    doc.text('Emp ID', 50, currentY, { width: 60 });
+    doc.text('Name', 110, currentY, { width: 100 });
+    doc.text('Date', 210, currentY, { width: 70 });
+    doc.text('Time (IST)', 280, currentY, { width: 70 });
+    doc.text('Location', 350, currentY, { width: 120 });
     
-    currentY += 25;
-    doc.fillColor('#000000');
+    currentY += rowHeight;
+    doc.moveTo(50, currentY - 5).lineTo(550, currentY - 5).stroke();
 
     // Data rows
     doc.font('Helvetica');
     attendance.forEach((att, index) => {
-      if (currentY > 720) {
+      if (currentY > 700) {
         doc.addPage();
         currentY = 50;
         
-        // Repeat header on new page
-        doc.fontSize(9).font('Helvetica-Bold');
-        doc.rect(50, currentY - 5, 500, 25).fillAndStroke('#FF6B35', '#FF6B35');
-        doc.fillColor('#FFFFFF');
-        doc.text('Emp ID', 55, currentY, { width: 55 });
-        doc.text('Name', 115, currentY, { width: 90 });
-        doc.text('Date', 210, currentY, { width: 68 });
-        doc.text('Time (IST)', 283, currentY, { width: 65 });
-        doc.text('Location', 353, currentY, { width: 120 });
-        currentY += 25;
-        doc.fillColor('#000000');
+        // Repeat header
+        doc.font('Helvetica-Bold').fontSize(8);
+        doc.text('Emp ID', 50, currentY, { width: 60 });
+        doc.text('Name', 110, currentY, { width: 100 });
+        doc.text('Date', 210, currentY, { width: 70 });
+        doc.text('Time (IST)', 280, currentY, { width: 70 });
+        doc.text('Location', 350, currentY, { width: 120 });
+        currentY += rowHeight;
+        doc.moveTo(50, currentY - 5).lineTo(550, currentY - 5).stroke();
         doc.font('Helvetica');
       }
 
       const istTime = convertToIST(att.timestamp).format('HH:mm:ss');
       const istDate = convertToIST(att.timestamp).format('YYYY-MM-DD');
 
-      // Alternate row colors
-      if (index % 2 === 0) {
-        doc.rect(50, currentY - 2, 500, 22).fillAndStroke('#f9f9f9', '#f9f9f9');
-      }
-
-      doc.fillColor('#000000')
-         .fontSize(8);
-      doc.text(att.employeeId || '', 55, currentY + 2, { width: 55 });
-      doc.text(att.userId ? att.userId.name : 'Unknown', 115, currentY + 2, { width: 90 });
-      doc.text(istDate, 210, currentY + 2, { width: 68 });
-      doc.text(istTime, 283, currentY + 2, { width: 65 });
-      doc.text(`${att.latitude.toFixed(4)}, ${att.longitude.toFixed(4)}`, 353, currentY + 2, { width: 115 });
+      doc.fontSize(7);
+      doc.text(att.employeeId || '', 50, currentY, { width: 60 });
+      doc.text(att.userId ? att.userId.name : 'Unknown', 110, currentY, { width: 100 });
+      doc.text(istDate, 210, currentY, { width: 70 });
+      doc.text(istTime, 280, currentY, { width: 70 });
+      doc.text(`${att.latitude.toFixed(4)}, ${att.longitude.toFixed(4)}`, 350, currentY, { width: 120 });
       
-      currentY += 22;
+      currentY += rowHeight;
+      
+      if (index < attendance.length - 1) {
+        doc.moveTo(50, currentY - 2).lineTo(550, currentY - 2).stroke('#CCCCCC');
+      }
     });
-
-    // Footer
-    doc.fontSize(8)
-       .fillColor('#666666')
-       .text(`Page ${doc.bufferedPageRange().count}`, 50, 770, { align: 'center' });
 
     doc.end();
 
