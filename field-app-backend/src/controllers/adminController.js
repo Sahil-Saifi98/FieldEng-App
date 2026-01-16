@@ -1,6 +1,6 @@
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
-const moment = require('moment-timezone');
+const moment = require('moment');
 const archiver = require('archiver');
 const PDFDocument = require('pdfkit');
 const axios = require('axios');
@@ -9,11 +9,6 @@ const path = require('path');
 const { promisify } = require('util');
 const stream = require('stream');
 const pipeline = promisify(stream.pipeline);
-
-// Helper function to convert UTC to IST
-function convertToIST(utcDate) {
-  return moment(utcDate).tz('Asia/Kolkata');
-}
 
 // Helper function to download image from URL
 async function downloadImage(url, filepath) {
@@ -138,8 +133,8 @@ exports.getUserAttendance = async (req, res) => {
 // @access  Private/Admin
 exports.getAdminStats = async (req, res) => {
   try {
-    const today = moment().tz('Asia/Kolkata').format('YYYY-MM-DD');
-    const thisMonth = moment().tz('Asia/Kolkata').format('YYYY-MM');
+    const today = moment().format('YYYY-MM-DD');
+    const thisMonth = moment().format('YYYY-MM');
 
     const totalUsers = await User.countDocuments();
     const activeUsers = await User.countDocuments({ isActive: true });
@@ -285,33 +280,35 @@ exports.exportUserData = async (req, res) => {
       });
     }
 
-    // Create CSV with IST times
-    let csvContent = 'Date,Check-in Time (IST),Latitude,Longitude,Selfie Filename\n';
+    let csvContent = 'Date,Check-in Time,Latitude,Longitude,Selfie Filename\n';
     
     const selfiesDir = path.join(userTempDir, 'selfies');
     fs.mkdirSync(selfiesDir, { recursive: true });
 
-    // Download images sequentially to avoid issues
+    const maxConcurrent = 3;
+    let downloadCount = 0;
+    
     for (let i = 0; i < attendance.length; i++) {
       const att = attendance[i];
-      
-      // Convert UTC timestamp to IST
-      const istTime = convertToIST(att.timestamp).format('HH:mm:ss');
-      const istDate = convertToIST(att.timestamp).format('YYYY-MM-DD');
-      
-      const filename = `selfie_${istDate}_${istTime.replace(/:/g, '-')}.jpg`;
+      const filename = `selfie_${att.date}_${att.checkInTime.replace(/:/g, '-')}.jpg`;
       const filepath = path.join(selfiesDir, filename);
 
-      csvContent += `"${istDate}","${istTime}",${att.latitude},${att.longitude},"selfies/${filename}"\n`;
+      csvContent += `"${att.date}","${att.checkInTime}",${att.latitude},${att.longitude},"selfies/${filename}"\n`;
 
-      // Download selfie image if available
-      if (att.selfiePath) {
-        console.log(`Downloading selfie ${i + 1}/${attendance.length}: ${att.selfiePath}`);
-        await downloadImage(att.selfiePath, filepath);
-        // Small delay to avoid overwhelming the server
-        await new Promise(resolve => setTimeout(resolve, 100));
+      if (att.selfiePath && (i < 100 || i % 5 === 0)) {
+        if (downloadCount < maxConcurrent) {
+          downloadImage(att.selfiePath, filepath).catch(err => 
+            console.error(`Failed to download ${filename}:`, err.message)
+          );
+          downloadCount++;
+        } else {
+          await downloadImage(att.selfiePath, filepath);
+          downloadCount = 0;
+        }
       }
     }
+
+    await new Promise(resolve => setTimeout(resolve, 2000));
 
     const csvPath = path.join(userTempDir, `${user.employeeId}_attendance.csv`);
     fs.writeFileSync(csvPath, csvContent);
@@ -328,20 +325,16 @@ exports.exportUserData = async (req, res) => {
         endDate: endDate || 'All'
       },
       totalRecords: attendance.length,
-      exportDate: convertToIST(new Date()).format('YYYY-MM-DD HH:mm:ss')
+      exportDate: new Date().toISOString()
     }, null, 2));
 
-    // Create ZIP with proper settings for Android compatibility
-    const archive = archiver('zip', { 
-      zlib: { level: 6 },
-      store: true // Use STORE method for better Android compatibility
-    });
-    
+    const archive = archiver('zip', { zlib: { level: 5 } });
     const zipFilename = `${user.employeeId}_export_${Date.now()}.zip`;
 
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
     res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Transfer-Encoding', 'chunked');
 
     archive.on('error', (err) => {
       console.error('Archive error:', err);
@@ -362,15 +355,11 @@ exports.exportUserData = async (req, res) => {
     });
 
     archive.pipe(res);
-    
-    // Add files to archive
-    archive.file(csvPath, { name: `${user.employeeId}_attendance.csv` });
-    archive.file(userInfoPath, { name: 'user_info.json' });
-    archive.directory(selfiesDir, 'selfies');
+    archive.directory(userTempDir, false);
 
     await archive.finalize();
 
-    console.log(`✅ Export completed: ${zipFilename}, size: ${archive.pointer()} bytes`);
+    console.log(`âœ… Export completed: ${zipFilename}, size: ${archive.pointer()} bytes`);
 
     res.on('finish', () => {
       setTimeout(() => {
@@ -386,7 +375,7 @@ exports.exportUserData = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Export user data error:', error);
+    console.error('âŒ Export user data error:', error);
     
     try {
       if (fs.existsSync(userTempDir)) {
@@ -450,40 +439,19 @@ exports.exportAllData = async (req, res) => {
       });
     }
 
-    // Create CSV with IST times
-    let csvContent = 'Employee ID,Employee Name,Department,Designation,Date (IST),Check-in Time (IST),Latitude,Longitude,Selfie Filename\n';
+    let csvContent = 'Employee ID,Employee Name,Department,Designation,Date,Check-in Time,Latitude,Longitude,Selfie URL\n';
     
-    const selfiesDir = path.join(exportTempDir, 'selfies');
-    fs.mkdirSync(selfiesDir, { recursive: true });
-
-    // Download selfies and create CSV
-    for (let i = 0; i < attendance.length; i++) {
-      const att = attendance[i];
-      
-      // Convert to IST
-      const istTime = convertToIST(att.timestamp).format('HH:mm:ss');
-      const istDate = convertToIST(att.timestamp).format('YYYY-MM-DD');
-      
-      const filename = `${att.employeeId}_${istDate}_${istTime.replace(/:/g, '-')}.jpg`;
-      const filepath = path.join(selfiesDir, filename);
-
+    attendance.forEach(att => {
       csvContent += `"${att.employeeId}",`;
       csvContent += `"${att.userId ? att.userId.name : 'Unknown'}",`;
       csvContent += `"${att.userId ? att.userId.department : ''}",`;
       csvContent += `"${att.userId ? att.userId.designation : ''}",`;
-      csvContent += `"${istDate}",`;
-      csvContent += `"${istTime}",`;
+      csvContent += `"${att.date}",`;
+      csvContent += `"${att.checkInTime}",`;
       csvContent += `${att.latitude},`;
       csvContent += `${att.longitude},`;
-      csvContent += `"selfies/${filename}"\n`;
-
-      // Download selfie if available
-      if (att.selfiePath) {
-        console.log(`Downloading selfie ${i + 1}/${attendance.length}`);
-        await downloadImage(att.selfiePath, filepath);
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-    }
+      csvContent += `"${att.selfiePath}"\n`;
+    });
 
     const csvPath = path.join(exportTempDir, 'all_attendance.csv');
     fs.writeFileSync(csvPath, csvContent);
@@ -495,16 +463,10 @@ exports.exportAllData = async (req, res) => {
         endDate: endDate || 'All'
       },
       totalRecords: attendance.length,
-      exportDate: convertToIST(new Date()).format('YYYY-MM-DD HH:mm:ss'),
-      timezone: 'Asia/Kolkata (IST)'
+      exportDate: new Date().toISOString()
     }, null, 2));
 
-    // Create ZIP with Android compatibility
-    const archive = archiver('zip', { 
-      zlib: { level: 6 },
-      store: true
-    });
-    
+    const archive = archiver('zip', { zlib: { level: 5 } });
     const zipFilename = `all_data_export_${Date.now()}.zip`;
 
     res.setHeader('Content-Type', 'application/zip');
@@ -519,14 +481,11 @@ exports.exportAllData = async (req, res) => {
     });
 
     archive.pipe(res);
-    
-    archive.file(csvPath, { name: 'all_attendance.csv' });
-    archive.file(summaryPath, { name: 'summary.json' });
-    archive.directory(selfiesDir, 'selfies');
+    archive.directory(exportTempDir, false);
 
     await archive.finalize();
 
-    console.log(`✅ Export all completed: ${zipFilename}`);
+    console.log(`âœ… Export all completed: ${zipFilename}`);
 
     res.on('finish', () => {
       setTimeout(() => {
@@ -541,7 +500,7 @@ exports.exportAllData = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Export all data error:', error);
+    console.error('âŒ Export all data error:', error);
     
     try {
       if (fs.existsSync(exportTempDir)) {
@@ -581,28 +540,26 @@ exports.exportAttendanceCSV = async (req, res) => {
 
     console.log(`Exporting ${attendance.length} records as CSV`);
 
-    let csv = 'Employee ID,Employee Name,Department,Designation,Date (IST),Check-in Time (IST),Latitude,Longitude\n';
+    let csv = 'Employee ID,Employee Name,Department,Designation,Date,Check-in Time,Latitude,Longitude,Selfie URL\n';
     
     attendance.forEach(att => {
-      const istTime = convertToIST(att.timestamp).format('HH:mm:ss');
-      const istDate = convertToIST(att.timestamp).format('YYYY-MM-DD');
-      
       csv += `"${att.employeeId}",`;
       csv += `"${att.userId ? att.userId.name : 'Unknown'}",`;
       csv += `"${att.userId ? att.userId.department : ''}",`;
       csv += `"${att.userId ? att.userId.designation : ''}",`;
-      csv += `"${istDate}",`;
-      csv += `"${istTime}",`;
+      csv += `"${att.date}",`;
+      csv += `"${att.checkInTime}",`;
       csv += `${att.latitude},`;
-      csv += `${att.longitude}\n`;
+      csv += `${att.longitude},`;
+      csv += `"${att.selfiePath}"\n`;
     });
 
     const filename = `attendance_${startDate || 'all'}_to_${endDate || 'all'}_${Date.now()}.csv`;
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.status(200).send('\ufeff' + csv); // Add BOM for Excel compatibility
+    res.status(200).send(csv);
 
-    console.log(`✅ CSV exported: ${filename}`);
+    console.log(`âœ… CSV exported: ${filename}`);
   } catch (error) {
     console.error('Export CSV error:', error);
     res.status(500).json({
@@ -646,62 +603,50 @@ exports.exportAttendancePDF = async (req, res) => {
 
     doc.pipe(res);
 
-    // Add logo if available
-    const logoPath = path.join(__dirname, '../backend/assets/logo.jpeg');
-    if (fs.existsSync(logoPath)) {
-      doc.image(logoPath, 50, 45, { width: 100 });
-    }
-
-    doc.fontSize(20).text('Attendance Report', 200, 57, { align: 'center' });
+    doc.fontSize(20).text('Attendance Report', { align: 'center' });
     doc.moveDown();
     
     doc.fontSize(12).text(`Date Range: ${startDate || 'All'} to ${endDate || 'All'}`, { align: 'center' });
     doc.fontSize(12).text(`Total Records: ${attendance.length}`, { align: 'center' });
-    doc.fontSize(10).text(`Generated: ${convertToIST(new Date()).format('YYYY-MM-DD HH:mm:ss IST')}`, { align: 'center' });
+    doc.fontSize(10).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
     doc.moveDown(2);
 
-    const rowHeight = 30;
+    const rowHeight = 25;
     let currentY = doc.y;
 
-    // Header
     doc.fontSize(8).font('Helvetica-Bold');
     doc.text('Emp ID', 50, currentY, { width: 60 });
     doc.text('Name', 110, currentY, { width: 100 });
     doc.text('Date', 210, currentY, { width: 70 });
-    doc.text('Time (IST)', 280, currentY, { width: 70 });
-    doc.text('Location', 350, currentY, { width: 120 });
+    doc.text('Time', 280, currentY, { width: 60 });
+    doc.text('Location', 340, currentY, { width: 120 });
     
     currentY += rowHeight;
     doc.moveTo(50, currentY - 5).lineTo(550, currentY - 5).stroke();
 
-    // Data rows
     doc.font('Helvetica');
     attendance.forEach((att, index) => {
       if (currentY > 700) {
         doc.addPage();
         currentY = 50;
         
-        // Repeat header
         doc.font('Helvetica-Bold').fontSize(8);
         doc.text('Emp ID', 50, currentY, { width: 60 });
         doc.text('Name', 110, currentY, { width: 100 });
         doc.text('Date', 210, currentY, { width: 70 });
-        doc.text('Time (IST)', 280, currentY, { width: 70 });
-        doc.text('Location', 350, currentY, { width: 120 });
+        doc.text('Time', 280, currentY, { width: 60 });
+        doc.text('Location', 340, currentY, { width: 120 });
         currentY += rowHeight;
         doc.moveTo(50, currentY - 5).lineTo(550, currentY - 5).stroke();
         doc.font('Helvetica');
       }
 
-      const istTime = convertToIST(att.timestamp).format('HH:mm:ss');
-      const istDate = convertToIST(att.timestamp).format('YYYY-MM-DD');
-
       doc.fontSize(7);
       doc.text(att.employeeId || '', 50, currentY, { width: 60 });
       doc.text(att.userId ? att.userId.name : 'Unknown', 110, currentY, { width: 100 });
-      doc.text(istDate, 210, currentY, { width: 70 });
-      doc.text(istTime, 280, currentY, { width: 70 });
-      doc.text(`${att.latitude.toFixed(4)}, ${att.longitude.toFixed(4)}`, 350, currentY, { width: 120 });
+      doc.text(att.date, 210, currentY, { width: 70 });
+      doc.text(att.checkInTime, 280, currentY, { width: 60 });
+      doc.text(`${att.latitude.toFixed(4)}, ${att.longitude.toFixed(4)}`, 340, currentY, { width: 120 });
       
       currentY += rowHeight;
       
@@ -712,7 +657,7 @@ exports.exportAttendancePDF = async (req, res) => {
 
     doc.end();
 
-    console.log(`✅ PDF exported: ${filename}`);
+    console.log(`âœ… PDF exported: ${filename}`);
 
   } catch (error) {
     console.error('Export PDF error:', error);
@@ -743,8 +688,7 @@ exports.exportAttendanceJSON = async (req, res) => {
       .limit(5000);
 
     const exportData = {
-      exportDate: convertToIST(new Date()).format('YYYY-MM-DD HH:mm:ss'),
-      timezone: 'Asia/Kolkata (IST)',
+      exportDate: new Date().toISOString(),
       dateRange: {
         startDate: startDate || 'All',
         endDate: endDate || 'All'
@@ -755,10 +699,11 @@ exports.exportAttendanceJSON = async (req, res) => {
         employeeName: att.userId ? att.userId.name : 'Unknown',
         department: att.userId ? att.userId.department : '',
         designation: att.userId ? att.userId.designation : '',
-        date: convertToIST(att.timestamp).format('YYYY-MM-DD'),
-        checkInTime: convertToIST(att.timestamp).format('HH:mm:ss'),
+        date: att.date,
+        checkInTime: att.checkInTime,
         latitude: att.latitude,
         longitude: att.longitude,
+        selfieUrl: att.selfiePath,
         timestamp: att.timestamp
       }))
     };
