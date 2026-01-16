@@ -359,7 +359,7 @@ exports.exportUserData = async (req, res) => {
 
     await archive.finalize();
 
-    console.log(`âœ… Export completed: ${zipFilename}, size: ${archive.pointer()} bytes`);
+    console.log(`✅ Export completed: ${zipFilename}, size: ${archive.pointer()} bytes`);
 
     res.on('finish', () => {
       setTimeout(() => {
@@ -375,7 +375,7 @@ exports.exportUserData = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('âŒ Export user data error:', error);
+    console.error('❌ Export user data error:', error);
     
     try {
       if (fs.existsSync(userTempDir)) {
@@ -485,7 +485,7 @@ exports.exportAllData = async (req, res) => {
 
     await archive.finalize();
 
-    console.log(`âœ… Export all completed: ${zipFilename}`);
+    console.log(`✅ Export all completed: ${zipFilename}`);
 
     res.on('finish', () => {
       setTimeout(() => {
@@ -500,7 +500,7 @@ exports.exportAllData = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('âŒ Export all data error:', error);
+    console.error('❌ Export all data error:', error);
     
     try {
       if (fs.existsSync(exportTempDir)) {
@@ -559,7 +559,7 @@ exports.exportAttendanceCSV = async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.status(200).send(csv);
 
-    console.log(`âœ… CSV exported: ${filename}`);
+    console.log(`✅ CSV exported: ${filename}`);
   } catch (error) {
     console.error('Export CSV error:', error);
     res.status(500).json({
@@ -657,7 +657,7 @@ exports.exportAttendancePDF = async (req, res) => {
 
     doc.end();
 
-    console.log(`âœ… PDF exported: ${filename}`);
+    console.log(`✅ PDF exported: ${filename}`);
 
   } catch (error) {
     console.error('Export PDF error:', error);
