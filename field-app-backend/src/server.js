@@ -5,6 +5,7 @@ const path = require('path');
 const connectDB = require('./config/database');
 const { initSecondaryConnection } = require('./config/dbSync');
 
+
 // Load environment variables
 dotenv.config();
 
@@ -59,6 +60,12 @@ app.use((err, req, res, next) => {
     success: false,
     message: err.message || 'Server Error'
   });
+});
+
+app.use((req, res, next) => {
+  req.setTimeout(300000); // 5 minutes
+  res.setTimeout(300000); // 5 minutes
+  next();
 });
 
 // Start server
