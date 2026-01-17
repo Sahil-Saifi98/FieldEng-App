@@ -122,9 +122,23 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
 
                 if (response.isSuccessful && response.body() != null) {
                     val fileName = "${user.employeeId}_export_${System.currentTimeMillis()}.zip"
+                    val body = response.body()!!
+
+                    // Check content length
+                    val contentLength = body.contentLength()
+                    Log.d("AdminExportVM", "Response body size: $contentLength bytes")
+
+                    if (contentLength == 0L) {
+                        _exportStatus.value = ExportStatus(
+                            isSuccess = false,
+                            message = "Server returned empty file"
+                        )
+                        showToast("Server returned empty file")
+                        return@launch
+                    }
 
                     // Save to Downloads with proper buffering
-                    val savedFile = saveToDownloadsOptimized(response.body()!!, fileName)
+                    val savedFile = saveToDownloadsOptimized(body, fileName)
 
                     if (savedFile != null) {
                         _exportStatus.value = ExportStatus(
@@ -314,11 +328,8 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
      */
     private suspend fun saveToDownloadsOptimized(body: ResponseBody, fileName: String): String? {
         return withContext(Dispatchers.IO) {
-            var inputStream: InputStream? = null
-            var outputStream: OutputStream? = null
-
             try {
-                inputStream = body.byteStream()
+                val inputStream = body.byteStream()
 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     // Use MediaStore for Android 10+
@@ -332,11 +343,11 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                     val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
 
                     uri?.let {
-                        outputStream = resolver.openOutputStream(it)
-                        outputStream?.let { output ->
-                            copyStreamWithProgress(inputStream, output)
+                        resolver.openOutputStream(it)?.use { outputStream ->
+                            copyStreamWithProgress(inputStream, outputStream)
                         }
                         Log.d("AdminExportVM", "File saved via MediaStore: $uri")
+                        inputStream.close()
                         fileName
                     }
                 } else {
@@ -350,9 +361,11 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                     }
 
                     val file = File(downloadsDir, fileName)
-                    outputStream = FileOutputStream(file)
+                    FileOutputStream(file).use { outputStream ->
+                        copyStreamWithProgress(inputStream, outputStream)
+                    }
 
-                    copyStreamWithProgress(inputStream, outputStream)
+                    inputStream.close()
 
                     // Notify download manager
                     notifyDownloadManager(file, fileName)
@@ -363,9 +376,6 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
             } catch (e: Exception) {
                 Log.e("AdminExportVM", "Error saving to downloads: ${e.message}", e)
                 null
-            } finally {
-                inputStream?.close()
-                outputStream?.close()
             }
         }
     }
@@ -392,7 +402,11 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
         }
 
         output.flush()
-        Log.d("AdminExportVM", "Total downloaded: ${totalBytes / 1024} KB")
+        Log.d("AdminExportVM", "Total downloaded: ${totalBytes / 1024} KB (${totalBytes} bytes)")
+
+        if (totalBytes == 0L) {
+            throw Exception("Downloaded file is empty (0 bytes)")
+        }
     }
 
     private fun notifyDownloadManager(file: File, fileName: String) {

@@ -288,31 +288,45 @@ exports.exportUserData = async (req, res) => {
     fs.mkdirSync(selfiesDir, { recursive: true });
 
     // Download images sequentially (not concurrently)
-    for (let i = 0; i < attendance.length; i++) {
+    let downloadedCount = 0;
+    for (let i = 0; i < Math.min(attendance.length, 100); i++) { // Limit to first 100
       const att = attendance[i];
       const filename = `selfie_${att.date}_${att.checkInTime.replace(/:/g, '-')}.jpg`;
       const filepath = path.join(selfiesDir, filename);
 
       csvContent += `"${att.date}","${att.checkInTime}",${att.latitude},${att.longitude},"selfies/${filename}"\n`;
 
-      // Download every 10th image to keep ZIP size manageable
-      if (att.selfiePath && i % 10 === 0) {
+      // Download images for better data
+      if (att.selfiePath) {
         try {
-          await downloadImage(att.selfiePath, filepath);
-          console.log(`Downloaded ${i + 1}/${attendance.length}`);
+          const success = await downloadImage(att.selfiePath, filepath);
+          if (success) {
+            downloadedCount++;
+            console.log(`Downloaded ${downloadedCount} of ${Math.min(attendance.length, 100)}`);
+          }
         } catch (err) {
           console.error(`Failed to download ${filename}:`, err.message);
         }
       }
     }
+    
+    // Add remaining records to CSV without downloading images
+    for (let i = 100; i < attendance.length; i++) {
+      const att = attendance[i];
+      const filename = `selfie_${att.date}_${att.checkInTime.replace(/:/g, '-')}.jpg`;
+      csvContent += `"${att.date}","${att.checkInTime}",${att.latitude},${att.longitude},"${att.selfiePath}"\n`;
+    }
+
+    console.log(`Downloaded ${downloadedCount} selfie images`);
 
     // Write CSV
     const csvPath = path.join(userTempDir, `${user.employeeId}_attendance.csv`);
     fs.writeFileSync(csvPath, csvContent);
+    console.log(`CSV written: ${csvPath}, size: ${fs.statSync(csvPath).size} bytes`);
 
     // Write user info
     const userInfoPath = path.join(userTempDir, 'user_info.json');
-    fs.writeFileSync(userInfoPath, JSON.stringify({
+    const userInfo = JSON.stringify({
       employeeId: user.employeeId,
       name: user.name,
       email: user.email,
@@ -323,8 +337,29 @@ exports.exportUserData = async (req, res) => {
         endDate: endDate || 'All'
       },
       totalRecords: attendance.length,
+      downloadedSelfies: downloadedCount,
       exportDate: new Date().toISOString()
-    }, null, 2));
+    }, null, 2);
+    fs.writeFileSync(userInfoPath, userInfo);
+    console.log(`User info written: ${userInfoPath}`);
+
+    // Verify files exist
+    const allFiles = [];
+    const walkDir = (dir) => {
+      const files = fs.readdirSync(dir);
+      files.forEach(file => {
+        const filePath = path.join(dir, file);
+        const stat = fs.statSync(filePath);
+        if (stat.isDirectory()) {
+          walkDir(filePath);
+        } else {
+          allFiles.push({ path: filePath, size: stat.size });
+        }
+      });
+    };
+    walkDir(userTempDir);
+    console.log(`Total files to archive: ${allFiles.length}`);
+    console.log(`Total size: ${allFiles.reduce((sum, f) => sum + f.size, 0)} bytes`);
 
     // Create ZIP with proper settings
     const archive = archiver('zip', { 
@@ -337,10 +372,14 @@ exports.exportUserData = async (req, res) => {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
     res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Content-Transfer-Encoding', 'binary');
 
     // Critical: Handle errors before piping
+    let archiveFinalized = false;
+    
     archive.on('error', (err) => {
       console.error('Archive error:', err);
+      archiveFinalized = true;
       try {
         if (fs.existsSync(userTempDir)) {
           fs.rmSync(userTempDir, { recursive: true, force: true });
@@ -349,6 +388,8 @@ exports.exportUserData = async (req, res) => {
       
       if (!res.headersSent) {
         res.status(500).json({ success: false, message: err.message });
+      } else {
+        res.end();
       }
     });
 
@@ -358,14 +399,33 @@ exports.exportUserData = async (req, res) => {
       }
     });
 
+    archive.on('end', () => {
+      console.log(`Archive data has been flushed`);
+    });
+
     // Pipe archive to response
     archive.pipe(res);
 
-    // Add all files from temp directory
-    archive.directory(userTempDir, false);
+    // Add files individually for better control
+    const files = fs.readdirSync(userTempDir);
+    console.log(`Adding ${files.length} items to archive`);
+
+    for (const file of files) {
+      const filePath = path.join(userTempDir, file);
+      const stat = fs.statSync(filePath);
+
+      if (stat.isDirectory()) {
+        // Add directory contents
+        archive.directory(filePath, file);
+      } else {
+        // Add individual file
+        archive.file(filePath, { name: file });
+      }
+    }
 
     // Finalize the archive
     await archive.finalize();
+    archiveFinalized = true;
 
     console.log(`✅ Export completed: ${zipFilename}, size: ${archive.pointer()} bytes`);
 
@@ -381,6 +441,13 @@ exports.exportUserData = async (req, res) => {
           console.error('Cleanup error:', cleanupErr);
         }
       }, 5000); // Increased cleanup delay
+    });
+
+    res.on('error', (err) => {
+      console.error('Response error:', err);
+      if (!archiveFinalized) {
+        archive.abort();
+      }
     });
 
   } catch (error) {
@@ -490,9 +557,13 @@ exports.exportAllData = async (req, res) => {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
     res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Content-Transfer-Encoding', 'binary');
+
+    let archiveFinalized = false;
 
     archive.on('error', (err) => {
       console.error('Archive error:', err);
+      archiveFinalized = true;
       try {
         if (fs.existsSync(exportTempDir)) {
           fs.rmSync(exportTempDir, { recursive: true, force: true });
@@ -501,14 +572,30 @@ exports.exportAllData = async (req, res) => {
       
       if (!res.headersSent) {
         res.status(500).json({ success: false, message: err.message });
+      } else {
+        res.end();
       }
     });
 
-    archive.pipe(res);
-    archive.directory(exportTempDir, false);
-    await archive.finalize();
+    archive.on('end', () => {
+      console.log('Archive data has been flushed');
+    });
 
-    console.log(`✅ Export all completed: ${zipFilename}`);
+    archive.pipe(res);
+
+    // Add files individually
+    const files = fs.readdirSync(exportTempDir);
+    console.log(`Adding ${files.length} files to archive`);
+
+    for (const file of files) {
+      const filePath = path.join(exportTempDir, file);
+      archive.file(filePath, { name: file });
+    }
+
+    await archive.finalize();
+    archiveFinalized = true;
+
+    console.log(`✅ Export all completed: ${zipFilename}, size: ${archive.pointer()} bytes`);
 
     res.on('finish', () => {
       setTimeout(() => {
@@ -520,6 +607,13 @@ exports.exportAllData = async (req, res) => {
           console.error('Cleanup error:', cleanupErr);
         }
       }, 5000);
+    });
+
+    res.on('error', (err) => {
+      console.error('Response error:', err);
+      if (!archiveFinalized) {
+        archive.abort();
+      }
     });
 
   } catch (error) {
