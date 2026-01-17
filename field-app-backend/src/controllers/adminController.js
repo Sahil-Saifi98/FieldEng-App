@@ -419,20 +419,23 @@ exports.exportUserData = async (req, res) => {
     // Pipe archive to response
     archive.pipe(res);
 
-    // Add files individually for better control
+    // Create a root folder name for the ZIP contents
+    const rootFolderName = `${user.employeeId}_export_${moment().format('YYYY-MM-DD')}`;
+
+    // Add files to archive with root folder structure
     const files = fs.readdirSync(userTempDir);
-    console.log(`Adding ${files.length} items to archive`);
+    console.log(`Adding ${files.length} items to archive under folder: ${rootFolderName}`);
 
     for (const file of files) {
       const filePath = path.join(userTempDir, file);
       const stat = fs.statSync(filePath);
 
       if (stat.isDirectory()) {
-        // Add directory contents
-        archive.directory(filePath, file);
+        // Add directory with root folder prefix
+        archive.directory(filePath, `${rootFolderName}/${file}`);
       } else {
-        // Add individual file
-        archive.file(filePath, { name: file });
+        // Add individual file with root folder prefix
+        archive.file(filePath, { name: `${rootFolderName}/${file}` });
       }
     }
 
@@ -600,13 +603,16 @@ exports.exportAllData = async (req, res) => {
 
     archive.pipe(res);
 
-    // Add files individually
+    // Create a root folder name for the ZIP contents
+    const rootFolderName = `all_data_export_${moment().format('YYYY-MM-DD')}`;
+
+    // Add files individually with root folder structure
     const files = fs.readdirSync(exportTempDir);
-    console.log(`Adding ${files.length} files to archive`);
+    console.log(`Adding ${files.length} files to archive under folder: ${rootFolderName}`);
 
     for (const file of files) {
       const filePath = path.join(exportTempDir, file);
-      archive.file(filePath, { name: file });
+      archive.file(filePath, { name: `${rootFolderName}/${file}` });
     }
 
     await archive.finalize();
