@@ -297,15 +297,15 @@ exports.exportUserData = async (req, res) => {
     // Create CSV
     let csvContent = 'Date,Check-in Time,Latitude,Longitude,Selfie Filename\n';
     
-    const selfiesDir = path.join(userTempDir, 'selfies');
-    fs.mkdirSync(selfiesDir, { recursive: true });
+    const selfiesDirectory = path.join(userTempDir, 'selfies');
+    fs.mkdirSync(selfiesDirectory, { recursive: true });
 
     // Download images sequentially (not concurrently)
     let downloadedCount = 0;
     for (let i = 0; i < Math.min(attendance.length, 100); i++) { // Limit to first 100
       const att = attendance[i];
       const filename = `selfie_${att.date}_${att.checkInTime.replace(/:/g, '-')}.jpg`;
-      const filepath = path.join(selfiesDir, filename);
+      const filepath = path.join(selfiesDirectory, filename);
 
       csvContent += `"${att.date}","${att.checkInTime}",${att.latitude},${att.longitude},"selfies/${filename}"\n`;
 
@@ -437,13 +437,13 @@ exports.exportUserData = async (req, res) => {
     }
 
     // Add selfies directory
-    const selfiesDir = path.join(userTempDir, 'selfies');
-    if (fs.existsSync(selfiesDir)) {
-      const selfies = fs.readdirSync(selfiesDir);
+    const selfiesArchiveDir = path.join(userTempDir, 'selfies');
+    if (fs.existsSync(selfiesArchiveDir)) {
+      const selfies = fs.readdirSync(selfiesArchiveDir);
       console.log(`Adding ${selfies.length} selfies to archive`);
       
       for (const selfie of selfies) {
-        const selfiePath = path.join(selfiesDir, selfie);
+        const selfiePath = path.join(selfiesArchiveDir, selfie);
         archive.file(selfiePath, { name: `${rootFolderName}/selfies/${selfie}` });
       }
     }
