@@ -422,20 +422,29 @@ exports.exportUserData = async (req, res) => {
     // Create a root folder name for the ZIP contents
     const rootFolderName = `${user.employeeId}_export_${moment().format('YYYY-MM-DD')}`;
 
-    // Add files to archive with root folder structure
-    const files = fs.readdirSync(userTempDir);
-    console.log(`Adding ${files.length} items to archive under folder: ${rootFolderName}`);
+    console.log(`Adding files to archive under folder: ${rootFolderName}`);
 
-    for (const file of files) {
-      const filePath = path.join(userTempDir, file);
-      const stat = fs.statSync(filePath);
+    // Add CSV file
+    const csvPath = path.join(userTempDir, `${user.employeeId}_attendance.csv`);
+    if (fs.existsSync(csvPath)) {
+      archive.file(csvPath, { name: `${rootFolderName}/${user.employeeId}_attendance.csv` });
+    }
 
-      if (stat.isDirectory()) {
-        // Add directory with root folder prefix
-        archive.directory(filePath, `${rootFolderName}/${file}`);
-      } else {
-        // Add individual file with root folder prefix
-        archive.file(filePath, { name: `${rootFolderName}/${file}` });
+    // Add user info
+    const userInfoPath = path.join(userTempDir, 'user_info.json');
+    if (fs.existsSync(userInfoPath)) {
+      archive.file(userInfoPath, { name: `${rootFolderName}/user_info.json` });
+    }
+
+    // Add selfies directory
+    const selfiesDir = path.join(userTempDir, 'selfies');
+    if (fs.existsSync(selfiesDir)) {
+      const selfies = fs.readdirSync(selfiesDir);
+      console.log(`Adding ${selfies.length} selfies to archive`);
+      
+      for (const selfie of selfies) {
+        const selfiePath = path.join(selfiesDir, selfie);
+        archive.file(selfiePath, { name: `${rootFolderName}/selfies/${selfie}` });
       }
     }
 
