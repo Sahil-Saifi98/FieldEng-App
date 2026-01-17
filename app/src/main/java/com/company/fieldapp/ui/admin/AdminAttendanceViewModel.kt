@@ -16,7 +16,7 @@ class AdminAttendanceViewModel(application: Application) : AndroidViewModel(appl
     private val _attendanceList = MutableStateFlow<List<AdminAttendanceData>>(emptyList())
     val attendanceList: StateFlow<List<AdminAttendanceData>> = _attendanceList
 
-    private val _filteredList = MutableStateFlow<List<AdminAttendanceData>>(emptyList())
+    private val _allData = MutableStateFlow<List<AdminAttendanceData>>(emptyList())
 
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading
@@ -42,10 +42,11 @@ class AdminAttendanceViewModel(application: Application) : AndroidViewModel(appl
             _errorMessage.value = null
 
             try {
-                val startDate = _selectedDate.value
-                val endDate = _selectedDate.value
+                // Only apply date filter if search query is empty
+                val startDate = if (_searchQuery.value.isEmpty()) _selectedDate.value else null
+                val endDate = if (_searchQuery.value.isEmpty()) _selectedDate.value else null
 
-                Log.d("AdminAttendanceVM", "Loading attendance: $startDate to $endDate")
+                Log.d("AdminAttendanceVM", "Loading attendance: $startDate to $endDate, search: ${_searchQuery.value}")
 
                 val response = RetrofitClient.adminApi.getAllAttendance(startDate, endDate)
 
@@ -66,8 +67,7 @@ class AdminAttendanceViewModel(application: Application) : AndroidViewModel(appl
                             )
                         }.sortedByDescending { it.date + it.checkInTime }
 
-                        _attendanceList.value = attendanceData
-                        _filteredList.value = attendanceData
+                        _allData.value = attendanceData
                         applyFilters()
 
                         Log.d("AdminAttendanceVM", "Loaded ${attendanceData.size} records")
@@ -105,21 +105,34 @@ class AdminAttendanceViewModel(application: Application) : AndroidViewModel(appl
 
     fun onDateSelected(date: String) {
         _selectedDate.value = date
-        loadAttendance()
+        // Only reload if search is empty
+        if (_searchQuery.value.isEmpty()) {
+            loadAttendance()
+        }
     }
 
     fun onSearchQueryChange(query: String) {
         _searchQuery.value = query
-        applyFilters()
+
+        // If user starts typing (2+ chars), reload all data (no date filter)
+        // If user clears search, reload with date filter
+        if (query.length >= 2) {
+            loadAttendance()
+        } else if (query.isEmpty()) {
+            loadAttendance()
+        } else {
+            // Just filter locally for 1 character
+            applyFilters()
+        }
     }
 
     private fun applyFilters() {
         val query = _searchQuery.value.lowercase()
 
         _attendanceList.value = if (query.isEmpty()) {
-            _filteredList.value
+            _allData.value
         } else {
-            _filteredList.value.filter { attendance ->
+            _allData.value.filter { attendance ->
                 attendance.employeeName.lowercase().contains(query) ||
                         attendance.employeeId.lowercase().contains(query) ||
                         attendance.latitude.toString().contains(query) ||
