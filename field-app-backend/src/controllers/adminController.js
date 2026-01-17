@@ -13,9 +13,21 @@ const pipeline = promisify(stream.pipeline);
 // Helper function to download image from URL
 async function downloadImage(url, filepath) {
   try {
+    // Fix backslashes in URL and ensure proper URL format
+    let cleanUrl = url.replace(/\\/g, '/');
+    
+    // If URL is a relative path (starts with uploads/), prepend the base URL
+    if (cleanUrl.startsWith('uploads/')) {
+      // Get the base URL from environment or use default
+      const baseUrl = process.env.BASE_URL || 'https://asap-kc7n.onrender.com';
+      cleanUrl = `${baseUrl}/${cleanUrl}`;
+    }
+    
+    console.log(`Downloading: ${cleanUrl}`);
+    
     const response = await axios({
       method: 'GET',
-      url: url,
+      url: cleanUrl,
       responseType: 'stream',
       timeout: 30000
     });
@@ -430,26 +442,29 @@ exports.exportUserData = async (req, res) => {
 
     console.log(`✅ Export completed: ${zipFilename}, size: ${archive.pointer()} bytes`);
 
-    // Cleanup after response finishes
-    res.on('finish', () => {
-      setTimeout(() => {
-        try {
-          if (fs.existsSync(userTempDir)) {
-            fs.rmSync(userTempDir, { recursive: true, force: true });
-            console.log(`Cleaned up: ${userTempDir}`);
-          }
-        } catch (cleanupErr) {
-          console.error('Cleanup error:', cleanupErr);
-        }
-      }, 5000); // Increased cleanup delay
+    // Wait for response to finish sending before cleanup
+    await new Promise((resolve) => {
+      res.on('finish', () => {
+        console.log('Response stream finished');
+        resolve();
+      });
+      res.on('error', (err) => {
+        console.error('Response error:', err);
+        resolve();
+      });
     });
 
-    res.on('error', (err) => {
-      console.error('Response error:', err);
-      if (!archiveFinalized) {
-        archive.abort();
+    // Cleanup after a delay
+    setTimeout(() => {
+      try {
+        if (fs.existsSync(userTempDir)) {
+          fs.rmSync(userTempDir, { recursive: true, force: true });
+          console.log(`Cleaned up: ${userTempDir}`);
+        }
+      } catch (cleanupErr) {
+        console.error('Cleanup error:', cleanupErr);
       }
-    });
+    }, 3000);
 
   } catch (error) {
     console.error('❌ Export user data error:', error);
@@ -599,24 +614,29 @@ exports.exportAllData = async (req, res) => {
 
     console.log(`✅ Export all completed: ${zipFilename}, size: ${archive.pointer()} bytes`);
 
-    res.on('finish', () => {
-      setTimeout(() => {
-        try {
-          if (fs.existsSync(exportTempDir)) {
-            fs.rmSync(exportTempDir, { recursive: true, force: true });
-          }
-        } catch (cleanupErr) {
-          console.error('Cleanup error:', cleanupErr);
-        }
-      }, 5000);
+    // Wait for response to finish
+    await new Promise((resolve) => {
+      res.on('finish', () => {
+        console.log('Response stream finished');
+        resolve();
+      });
+      res.on('error', (err) => {
+        console.error('Response error:', err);
+        resolve();
+      });
     });
 
-    res.on('error', (err) => {
-      console.error('Response error:', err);
-      if (!archiveFinalized) {
-        archive.abort();
+    // Cleanup after delay
+    setTimeout(() => {
+      try {
+        if (fs.existsSync(exportTempDir)) {
+          fs.rmSync(exportTempDir, { recursive: true, force: true });
+          console.log(`Cleaned up: ${exportTempDir}`);
+        }
+      } catch (cleanupErr) {
+        console.error('Cleanup error:', cleanupErr);
       }
-    });
+    }, 3000);
 
   } catch (error) {
     console.error('❌ Export all data error:', error);
