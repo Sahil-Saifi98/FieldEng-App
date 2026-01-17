@@ -231,7 +231,8 @@ exports.toggleUserActive = async (req, res) => {
 // @route   POST /api/admin/export/user/:userId
 // @access  Private/Admin
 exports.exportUserData = async (req, res) => {
-  const tempDir = path.join(__dirname, '../temp');
+  // Move temp directory OUTSIDE src to avoid nodemon restarts
+  const tempDir = path.join(__dirname, '../../temp');
   const userTempDir = path.join(tempDir, `user_${req.params.userId}_${Date.now()}`);
 
   try {
@@ -474,7 +475,8 @@ exports.exportUserData = async (req, res) => {
 // @route   POST /api/admin/export/all
 // @access  Private/Admin
 exports.exportAllData = async (req, res) => {
-  const tempDir = path.join(__dirname, '../temp');
+  // Move temp directory OUTSIDE src to avoid nodemon restarts
+  const tempDir = path.join(__dirname, '../../temp');
   const exportTempDir = path.join(tempDir, `all_export_${Date.now()}`);
 
   try {
