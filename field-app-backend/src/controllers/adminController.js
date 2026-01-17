@@ -333,9 +333,9 @@ exports.exportUserData = async (req, res) => {
     console.log(`Downloaded ${downloadedCount} selfie images`);
 
     // Write CSV
-    const csvPath = path.join(userTempDir, `${user.employeeId}_attendance.csv`);
-    fs.writeFileSync(csvPath, csvContent);
-    console.log(`CSV written: ${csvPath}, size: ${fs.statSync(csvPath).size} bytes`);
+    const csvFilePath = path.join(userTempDir, `${user.employeeId}_attendance.csv`);
+    fs.writeFileSync(csvFilePath, csvContent);
+    console.log(`CSV written: ${csvFilePath}, size: ${fs.statSync(csvFilePath).size} bytes`);
 
     // Write user info
     const userInfoPath = path.join(userTempDir, 'user_info.json');
@@ -425,15 +425,15 @@ exports.exportUserData = async (req, res) => {
     console.log(`Adding files to archive under folder: ${rootFolderName}`);
 
     // Add CSV file
-    const csvPath = path.join(userTempDir, `${user.employeeId}_attendance.csv`);
-    if (fs.existsSync(csvPath)) {
-      archive.file(csvPath, { name: `${rootFolderName}/${user.employeeId}_attendance.csv` });
+    const csvArchivePath = path.join(userTempDir, `${user.employeeId}_attendance.csv`);
+    if (fs.existsSync(csvArchivePath)) {
+      archive.file(csvArchivePath, { name: `${rootFolderName}/${user.employeeId}_attendance.csv` });
     }
 
     // Add user info
-    const userInfoPath = path.join(userTempDir, 'user_info.json');
-    if (fs.existsSync(userInfoPath)) {
-      archive.file(userInfoPath, { name: `${rootFolderName}/user_info.json` });
+    const userInfoArchivePath = path.join(userTempDir, 'user_info.json');
+    if (fs.existsSync(userInfoArchivePath)) {
+      archive.file(userInfoArchivePath, { name: `${rootFolderName}/user_info.json` });
     }
 
     // Add selfies directory
