@@ -39,6 +39,7 @@ object RetrofitClient {
         authToken = token
     }
 
+    // Standard client for normal API calls
     private val okHttpClient = OkHttpClient.Builder()
         .addInterceptor(loggingInterceptor)
         .addInterceptor(AuthInterceptor { authToken })
@@ -47,13 +48,36 @@ object RetrofitClient {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    // Extended timeout client specifically for file downloads/exports
+    private val downloadClient = OkHttpClient.Builder()
+        .addInterceptor(HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.HEADERS // Less verbose for large downloads
+        })
+        .addInterceptor(AuthInterceptor { authToken })
+        .connectTimeout(60, TimeUnit.SECONDS)      // 1 minute to establish connection
+        .readTimeout(10, TimeUnit.MINUTES)         // 10 minutes to read response data
+        .writeTimeout(5, TimeUnit.MINUTES)         // 5 minutes to write request data
+        .callTimeout(15, TimeUnit.MINUTES)         // 15 minutes total call timeout
+        .retryOnConnectionFailure(true)            // Retry on connection failures
+        .build()
+
+    // Standard Retrofit instance
     private val retrofit = Retrofit.Builder()
         .baseUrl(BASE_URL)
         .client(okHttpClient)
         .addConverterFactory(GsonConverterFactory.create())
         .build()
 
+    // Download Retrofit instance with extended timeouts
+    private val downloadRetrofit = Retrofit.Builder()
+        .baseUrl(BASE_URL)
+        .client(downloadClient)
+        .addConverterFactory(GsonConverterFactory.create())
+        .build()
+
     val authApi: AuthApi = retrofit.create(AuthApi::class.java)
     val attendanceApi: AttendanceApi = retrofit.create(AttendanceApi::class.java)
-    val adminApi: AdminApi = retrofit.create(AdminApi::class.java)
+
+    // Use download client for admin API (handles large file exports)
+    val adminApi: AdminApi = downloadRetrofit.create(AdminApi::class.java)
 }

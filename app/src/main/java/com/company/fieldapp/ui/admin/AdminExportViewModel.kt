@@ -25,6 +25,7 @@ import okhttp3.ResponseBody
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.*
@@ -53,10 +54,10 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
 
     init {
         loadUsers()
-        // Set default date range (last 30 days)
+        // Set default date range (last 7 days instead of 30)
         val calendar = Calendar.getInstance()
         val endDateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(calendar.time)
-        calendar.add(Calendar.DAY_OF_YEAR, -30)
+        calendar.add(Calendar.DAY_OF_YEAR, -7)
         val startDateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(calendar.time)
 
         _startDate.value = startDateStr
@@ -114,7 +115,7 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                 val requestBody = jsonBody.toString()
                     .toRequestBody("application/json".toMediaTypeOrNull())
 
-                // Make API call to export user data
+                // Make API call
                 val response = RetrofitClient.adminApi.exportUserDataZip(user._id, requestBody)
 
                 Log.d("AdminExportVM", "Response code: ${response.code()}")
@@ -122,8 +123,8 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                 if (response.isSuccessful && response.body() != null) {
                     val fileName = "${user.employeeId}_export_${System.currentTimeMillis()}.zip"
 
-                    // Save to Downloads folder
-                    val savedFile = saveToDownloads(response.body()!!, fileName)
+                    // Save to Downloads with proper buffering
+                    val savedFile = saveToDownloadsOptimized(response.body()!!, fileName)
 
                     if (savedFile != null) {
                         _exportStatus.value = ExportStatus(
@@ -141,9 +142,10 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                     }
                 } else {
                     val errorMsg = when (response.code()) {
-                        502 -> "Server gateway error. Please try with a smaller date range."
-                        503 -> "Service temporarily unavailable. Please try again."
-                        504 -> "Request timeout. Try exporting fewer records."
+                        404 -> "No records found for selected date range"
+                        502 -> "Server error. Try a smaller date range."
+                        503 -> "Service unavailable. Please try again."
+                        504 -> "Request timeout. Try a smaller date range."
                         else -> "Failed to export: ${response.code()}"
                     }
 
@@ -156,7 +158,7 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
             } catch (e: Exception) {
                 val errorMsg = when {
                     e.message?.contains("timeout") == true ->
-                        "Request timeout. Try a smaller date range."
+                        "Request timeout. Try a smaller date range (2-3 days max)."
                     e.message?.contains("Unable to resolve host") == true ->
                         "Network error. Check your connection."
                     else -> "Error: ${e.message}"
@@ -191,7 +193,7 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
 
                 if (response.isSuccessful && response.body() != null) {
                     val fileName = "all_data_export_${System.currentTimeMillis()}.zip"
-                    val savedFile = saveToDownloads(response.body()!!, fileName)
+                    val savedFile = saveToDownloadsOptimized(response.body()!!, fileName)
 
                     if (savedFile != null) {
                         _exportStatus.value = ExportStatus(
@@ -207,7 +209,8 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                     }
                 } else {
                     val errorMsg = when (response.code()) {
-                        502 -> "Server gateway error. Try a smaller date range."
+                        404 -> "No records found for selected date range"
+                        502 -> "Server error. Try a smaller date range."
                         503 -> "Service unavailable. Please try again."
                         504 -> "Timeout. Try exporting fewer records."
                         else -> "Export failed: ${response.code()}"
@@ -216,11 +219,16 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                     showToast(errorMsg)
                 }
             } catch (e: Exception) {
+                val errorMsg = when {
+                    e.message?.contains("timeout") == true ->
+                        "Timeout. Try a smaller date range."
+                    else -> "Error: ${e.message}"
+                }
                 _exportStatus.value = ExportStatus(
                     isSuccess = false,
-                    message = "Error: ${e.message}"
+                    message = errorMsg
                 )
-                showToast("Export failed: ${e.message}")
+                showToast("Export failed: $errorMsg")
                 Log.e("AdminExportVM", "Export all error: ${e.message}", e)
             } finally {
                 _isLoading.value = false
@@ -255,7 +263,7 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
 
                 if (response.isSuccessful && response.body() != null) {
                     val fileName = "attendance_${System.currentTimeMillis()}.$format"
-                    val savedFile = saveToDownloads(response.body()!!, fileName)
+                    val savedFile = saveToDownloadsOptimized(response.body()!!, fileName)
 
                     if (savedFile != null) {
                         _exportStatus.value = ExportStatus(
@@ -302,11 +310,16 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     /**
-     * Save file to public Downloads folder (Android 10+)
+     * Optimized file download with proper buffering
      */
-    private suspend fun saveToDownloads(body: ResponseBody, fileName: String): String? {
+    private suspend fun saveToDownloadsOptimized(body: ResponseBody, fileName: String): String? {
         return withContext(Dispatchers.IO) {
+            var inputStream: InputStream? = null
+            var outputStream: OutputStream? = null
+
             try {
+                inputStream = body.byteStream()
+
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     // Use MediaStore for Android 10+
                     val contentValues = ContentValues().apply {
@@ -319,8 +332,9 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                     val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
 
                     uri?.let {
-                        resolver.openOutputStream(it)?.use { outputStream ->
-                            writeResponseBodyToStream(body, outputStream)
+                        outputStream = resolver.openOutputStream(it)
+                        outputStream?.let { output ->
+                            copyStreamWithProgress(inputStream, output)
                         }
                         Log.d("AdminExportVM", "File saved via MediaStore: $uri")
                         fileName
@@ -336,9 +350,9 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                     }
 
                     val file = File(downloadsDir, fileName)
-                    FileOutputStream(file).use { outputStream ->
-                        writeResponseBodyToStream(body, outputStream)
-                    }
+                    outputStream = FileOutputStream(file)
+
+                    copyStreamWithProgress(inputStream, outputStream)
 
                     // Notify download manager
                     notifyDownloadManager(file, fileName)
@@ -349,24 +363,36 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
             } catch (e: Exception) {
                 Log.e("AdminExportVM", "Error saving to downloads: ${e.message}", e)
                 null
+            } finally {
+                inputStream?.close()
+                outputStream?.close()
             }
         }
     }
 
-    private fun writeResponseBodyToStream(body: ResponseBody, outputStream: OutputStream) {
-        body.byteStream().use { inputStream ->
-            val buffer = ByteArray(8192) // Larger buffer for better performance
-            var bytesRead: Int
-            var totalBytes = 0L
+    /**
+     * Copy stream with progress logging and proper buffering
+     */
+    private fun copyStreamWithProgress(input: InputStream, output: OutputStream) {
+        val buffer = ByteArray(16384) // 16KB buffer
+        var bytesRead: Int
+        var totalBytes = 0L
+        var lastLogTime = System.currentTimeMillis()
 
-            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                outputStream.write(buffer, 0, bytesRead)
-                totalBytes += bytesRead
+        while (input.read(buffer).also { bytesRead = it } != -1) {
+            output.write(buffer, 0, bytesRead)
+            totalBytes += bytesRead
+
+            // Log progress every 2 seconds
+            val currentTime = System.currentTimeMillis()
+            if (currentTime - lastLogTime > 2000) {
+                Log.d("AdminExportVM", "Downloaded: ${totalBytes / 1024} KB")
+                lastLogTime = currentTime
             }
-
-            outputStream.flush()
-            Log.d("AdminExportVM", "Wrote $totalBytes bytes to file")
         }
+
+        output.flush()
+        Log.d("AdminExportVM", "Total downloaded: ${totalBytes / 1024} KB")
     }
 
     private fun notifyDownloadManager(file: File, fileName: String) {

@@ -240,8 +240,9 @@ exports.exportUserData = async (req, res) => {
 
     console.log('Export request:', { userId, startDate, endDate });
 
-    req.setTimeout(600000);
-    res.setTimeout(600000);
+    // Set aggressive timeouts
+    req.setTimeout(0); // No timeout
+    res.setTimeout(0);
 
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
@@ -268,7 +269,7 @@ exports.exportUserData = async (req, res) => {
 
     const attendance = await Attendance.find(query)
       .sort({ date: -1, timestamp: -1 })
-      .limit(1000);
+      .limit(500); // Reduced limit for stability
 
     console.log(`Found ${attendance.length} attendance records for export`);
 
@@ -280,14 +281,13 @@ exports.exportUserData = async (req, res) => {
       });
     }
 
+    // Create CSV
     let csvContent = 'Date,Check-in Time,Latitude,Longitude,Selfie Filename\n';
     
     const selfiesDir = path.join(userTempDir, 'selfies');
     fs.mkdirSync(selfiesDir, { recursive: true });
 
-    const maxConcurrent = 3;
-    let downloadCount = 0;
-    
+    // Download images sequentially (not concurrently)
     for (let i = 0; i < attendance.length; i++) {
       const att = attendance[i];
       const filename = `selfie_${att.date}_${att.checkInTime.replace(/:/g, '-')}.jpg`;
@@ -295,24 +295,22 @@ exports.exportUserData = async (req, res) => {
 
       csvContent += `"${att.date}","${att.checkInTime}",${att.latitude},${att.longitude},"selfies/${filename}"\n`;
 
-      if (att.selfiePath && (i < 100 || i % 5 === 0)) {
-        if (downloadCount < maxConcurrent) {
-          downloadImage(att.selfiePath, filepath).catch(err => 
-            console.error(`Failed to download ${filename}:`, err.message)
-          );
-          downloadCount++;
-        } else {
+      // Download every 10th image to keep ZIP size manageable
+      if (att.selfiePath && i % 10 === 0) {
+        try {
           await downloadImage(att.selfiePath, filepath);
-          downloadCount = 0;
+          console.log(`Downloaded ${i + 1}/${attendance.length}`);
+        } catch (err) {
+          console.error(`Failed to download ${filename}:`, err.message);
         }
       }
     }
 
-    await new Promise(resolve => setTimeout(resolve, 2000));
-
+    // Write CSV
     const csvPath = path.join(userTempDir, `${user.employeeId}_attendance.csv`);
     fs.writeFileSync(csvPath, csvContent);
 
+    // Write user info
     const userInfoPath = path.join(userTempDir, 'user_info.json');
     fs.writeFileSync(userInfoPath, JSON.stringify({
       employeeId: user.employeeId,
@@ -328,24 +326,30 @@ exports.exportUserData = async (req, res) => {
       exportDate: new Date().toISOString()
     }, null, 2));
 
-    const archive = archiver('zip', { zlib: { level: 5 } });
+    // Create ZIP with proper settings
+    const archive = archiver('zip', { 
+      zlib: { level: 6 }, // Balanced compression
+      statConcurrency: 1 // Process files one at a time
+    });
+    
     const zipFilename = `${user.employeeId}_export_${Date.now()}.zip`;
 
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
     res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Transfer-Encoding', 'chunked');
 
+    // Critical: Handle errors before piping
     archive.on('error', (err) => {
       console.error('Archive error:', err);
-      if (!res.headersSent) {
-        res.status(500).json({ success: false, message: err.message });
-      }
-      setTimeout(() => {
+      try {
         if (fs.existsSync(userTempDir)) {
           fs.rmSync(userTempDir, { recursive: true, force: true });
         }
-      }, 1000);
+      } catch (e) {}
+      
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, message: err.message });
+      }
     });
 
     archive.on('warning', (err) => {
@@ -354,13 +358,18 @@ exports.exportUserData = async (req, res) => {
       }
     });
 
+    // Pipe archive to response
     archive.pipe(res);
+
+    // Add all files from temp directory
     archive.directory(userTempDir, false);
 
+    // Finalize the archive
     await archive.finalize();
 
     console.log(`✅ Export completed: ${zipFilename}, size: ${archive.pointer()} bytes`);
 
+    // Cleanup after response finishes
     res.on('finish', () => {
       setTimeout(() => {
         try {
@@ -371,7 +380,7 @@ exports.exportUserData = async (req, res) => {
         } catch (cleanupErr) {
           console.error('Cleanup error:', cleanupErr);
         }
-      }, 2000);
+      }, 5000); // Increased cleanup delay
     });
 
   } catch (error) {
@@ -406,8 +415,9 @@ exports.exportAllData = async (req, res) => {
 
     console.log('Export all request:', { startDate, endDate });
 
-    req.setTimeout(600000);
-    res.setTimeout(600000);
+    // Remove timeouts
+    req.setTimeout(0);
+    res.setTimeout(0);
 
     if (!fs.existsSync(tempDir)) {
       fs.mkdirSync(tempDir, { recursive: true });
@@ -424,10 +434,11 @@ exports.exportAllData = async (req, res) => {
 
     console.log('Query:', JSON.stringify(query));
 
+    // Limit to prevent memory issues
     const attendance = await Attendance.find(query)
       .populate('userId', 'name employeeId email department designation')
       .sort({ date: -1, timestamp: -1 })
-      .limit(2000);
+      .limit(1000); // Reduced from 2000
 
     console.log(`Found ${attendance.length} total records for export`);
 
@@ -439,6 +450,7 @@ exports.exportAllData = async (req, res) => {
       });
     }
 
+    // Create CSV only (no images for "all data" to prevent huge files)
     let csvContent = 'Employee ID,Employee Name,Department,Designation,Date,Check-in Time,Latitude,Longitude,Selfie URL\n';
     
     attendance.forEach(att => {
@@ -463,10 +475,16 @@ exports.exportAllData = async (req, res) => {
         endDate: endDate || 'All'
       },
       totalRecords: attendance.length,
-      exportDate: new Date().toISOString()
+      exportDate: new Date().toISOString(),
+      note: 'Selfie URLs are included in CSV. Download individual user exports for actual image files.'
     }, null, 2));
 
-    const archive = archiver('zip', { zlib: { level: 5 } });
+    // Create ZIP
+    const archive = archiver('zip', { 
+      zlib: { level: 6 },
+      statConcurrency: 1
+    });
+    
     const zipFilename = `all_data_export_${Date.now()}.zip`;
 
     res.setHeader('Content-Type', 'application/zip');
@@ -475,6 +493,12 @@ exports.exportAllData = async (req, res) => {
 
     archive.on('error', (err) => {
       console.error('Archive error:', err);
+      try {
+        if (fs.existsSync(exportTempDir)) {
+          fs.rmSync(exportTempDir, { recursive: true, force: true });
+        }
+      } catch (e) {}
+      
       if (!res.headersSent) {
         res.status(500).json({ success: false, message: err.message });
       }
@@ -482,7 +506,6 @@ exports.exportAllData = async (req, res) => {
 
     archive.pipe(res);
     archive.directory(exportTempDir, false);
-
     await archive.finalize();
 
     console.log(`✅ Export all completed: ${zipFilename}`);
@@ -496,7 +519,7 @@ exports.exportAllData = async (req, res) => {
         } catch (cleanupErr) {
           console.error('Cleanup error:', cleanupErr);
         }
-      }, 2000);
+      }, 5000);
     });
 
   } catch (error) {
