@@ -78,18 +78,19 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     val userId = sessionManager.getUserId() ?: ""
                     val employeeId = sessionManager.getEmployeeId() ?: ""
 
-                    // Save to local database first
+                    // Save to local database first with temporary address
                     val attendance = AttendanceEntity(
                         userId = userId,
                         employeeId = employeeId,
                         selfiePath = selfiePath,
                         latitude = lat,
                         longitude = lng,
+                        address = "Location: $lat, $lng", // ✅ Temporary address placeholder
                         timestamp = timestamp,
                         isSynced = false
                     )
-                    repository.saveAttendance(attendance)
-                    Log.d("AttendanceVM", "Saved to local DB")
+                    val localId = repository.saveAttendance(attendance)
+                    Log.d("AttendanceVM", "Saved to local DB with ID: $localId")
 
                     // Send to backend immediately
                     _status.value = "Uploading to server..."
@@ -115,11 +116,20 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                         )
 
                         if (response.isSuccessful && response.body()?.success == true) {
-                            // Mark as synced in local database
-                            val localAttendances = repository.getTodayAttendance()
-                            val latestAttendance = localAttendances.firstOrNull { it.timestamp == timestamp }
-                            if (latestAttendance != null) {
-                                repository.markAsSynced(latestAttendance.id)
+                            val serverData = response.body()!!.data
+
+                            // ✅ Update local record with server's address
+                            if (serverData != null) {
+                                val updatedAttendance = attendance.copy(
+                                    id = localId,
+                                    address = serverData.address, // ✅ Update with actual address from server
+                                    isSynced = true
+                                )
+                                repository.updateAttendance(updatedAttendance)
+                                Log.d("AttendanceVM", "Updated local record with address: ${serverData.address}")
+                            } else {
+                                // Just mark as synced
+                                repository.markAsSynced(localId)
                             }
 
                             _status.value = "✅ Attendance recorded successfully!"

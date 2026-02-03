@@ -10,9 +10,12 @@ exports.submitAttendance = async (req, res) => {
   try {
     const { latitude, longitude, timestamp } = req.body;
     
-    console.log('Received attendance submission:', {
+    console.log('📥 Received attendance submission:', {
       userId: req.user._id,
       employeeId: req.user.employeeId,
+      latitude,
+      longitude,
+      timestamp,
       hasFile: !!req.file
     });
     
@@ -26,9 +29,23 @@ exports.submitAttendance = async (req, res) => {
     const lat = parseFloat(latitude);
     const lng = parseFloat(longitude);
     
-    // Get address from coordinates
-    const address = await getAddressFromCoordinates(lat, lng);
-    console.log('📍 Address:', address);
+    // Validate coordinates
+    if (isNaN(lat) || isNaN(lng)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid coordinates provided'
+      });
+    }
+    
+    // Get address from coordinates (with fallback)
+    let address = 'Address unavailable';
+    try {
+      address = await getAddressFromCoordinates(lat, lng);
+      console.log('📍 Address:', address);
+    } catch (geoError) {
+      console.error('⚠️ Geocoding failed, using fallback:', geoError.message);
+      address = `Location: ${lat}, ${lng}`;
+    }
 
     const timestampDate = new Date(parseInt(timestamp));
     const date = moment(timestampDate).format('YYYY-MM-DD');
@@ -42,14 +59,19 @@ exports.submitAttendance = async (req, res) => {
       selfiePath: selfieUrl,
       latitude: lat,
       longitude: lng,
-      address: address, // ✅ Now populated
+      address: address, // ✅ Now populated with fallback
       timestamp: timestampDate,
       date: date,
       checkInTime: checkInTime
     });
 
-    console.log('✅ Attendance created with address:', attendance._id);
+    console.log('✅ Attendance created:', {
+      id: attendance._id,
+      employeeId: attendance.employeeId,
+      address: attendance.address
+    });
 
+    // Sync to secondary database
     syncToSecondary('Attendance', Attendance.schema, attendance.toObject());
 
     res.status(201).json({
@@ -65,6 +87,7 @@ exports.submitAttendance = async (req, res) => {
     });
   }
 };
+
 // @desc    Get today's attendance for logged in user only
 // @route   GET /api/attendance/today
 // @access  Private

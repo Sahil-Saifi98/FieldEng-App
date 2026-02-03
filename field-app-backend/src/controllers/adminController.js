@@ -683,7 +683,8 @@ exports.exportAttendanceCSV = async (req, res) => {
 
     console.log(`Exporting ${attendance.length} records as CSV`);
 
-    let csv = 'Employee ID,Employee Name,Department,Designation,Date,Check-in Time,Latitude,Longitude,Selfie URL\n';
+    // ✅ Added Address column
+    let csv = 'Employee ID,Employee Name,Department,Designation,Date,Check-in Time,Latitude,Longitude,Address,Selfie URL\n';
     
     attendance.forEach(att => {
       csv += `"${att.employeeId}",`;
@@ -694,6 +695,7 @@ exports.exportAttendanceCSV = async (req, res) => {
       csv += `"${att.checkInTime}",`;
       csv += `${att.latitude},`;
       csv += `${att.longitude},`;
+      csv += `"${att.address || 'Address unavailable'}",`; // ✅ Added address field
       csv += `"${att.selfiePath}"\n`;
     });
 
@@ -733,9 +735,11 @@ exports.exportAttendancePDF = async (req, res) => {
 
     console.log(`Exporting ${attendance.length} records as PDF`);
 
+    // ✅ Use landscape orientation for wider table with address
     const doc = new PDFDocument({ 
-      margin: 50, 
+      margin: 30, 
       size: 'A4',
+      layout: 'landscape', // ✅ Changed to landscape for address column
       bufferPages: true
     });
     
@@ -754,47 +758,56 @@ exports.exportAttendancePDF = async (req, res) => {
     doc.fontSize(10).text(`Generated: ${new Date().toLocaleString()}`, { align: 'center' });
     doc.moveDown(2);
 
-    const rowHeight = 25;
+    const rowHeight = 30; // Increased for address wrapping
     let currentY = doc.y;
 
+    // ✅ Updated column headers with address
     doc.fontSize(8).font('Helvetica-Bold');
-    doc.text('Emp ID', 50, currentY, { width: 60 });
-    doc.text('Name', 110, currentY, { width: 100 });
-    doc.text('Date', 210, currentY, { width: 70 });
-    doc.text('Time', 280, currentY, { width: 60 });
-    doc.text('Location', 340, currentY, { width: 120 });
+    doc.text('Emp ID', 30, currentY, { width: 50 });
+    doc.text('Name', 85, currentY, { width: 80 });
+    doc.text('Date', 170, currentY, { width: 60 });
+    doc.text('Time', 235, currentY, { width: 45 });
+    doc.text('Location', 285, currentY, { width: 80 });
+    doc.text('Address', 370, currentY, { width: 400 }); // ✅ Added address column
     
     currentY += rowHeight;
-    doc.moveTo(50, currentY - 5).lineTo(550, currentY - 5).stroke();
+    doc.moveTo(30, currentY - 5).lineTo(780, currentY - 5).stroke();
 
     doc.font('Helvetica');
     attendance.forEach((att, index) => {
-      if (currentY > 700) {
+      if (currentY > 520) { // Adjusted for landscape
         doc.addPage();
         currentY = 50;
         
         doc.font('Helvetica-Bold').fontSize(8);
-        doc.text('Emp ID', 50, currentY, { width: 60 });
-        doc.text('Name', 110, currentY, { width: 100 });
-        doc.text('Date', 210, currentY, { width: 70 });
-        doc.text('Time', 280, currentY, { width: 60 });
-        doc.text('Location', 340, currentY, { width: 120 });
+        doc.text('Emp ID', 30, currentY, { width: 50 });
+        doc.text('Name', 85, currentY, { width: 80 });
+        doc.text('Date', 170, currentY, { width: 60 });
+        doc.text('Time', 235, currentY, { width: 45 });
+        doc.text('Location', 285, currentY, { width: 80 });
+        doc.text('Address', 370, currentY, { width: 400 });
         currentY += rowHeight;
-        doc.moveTo(50, currentY - 5).lineTo(550, currentY - 5).stroke();
+        doc.moveTo(30, currentY - 5).lineTo(780, currentY - 5).stroke();
         doc.font('Helvetica');
       }
 
       doc.fontSize(7);
-      doc.text(att.employeeId || '', 50, currentY, { width: 60 });
-      doc.text(att.userId ? att.userId.name : 'Unknown', 110, currentY, { width: 100 });
-      doc.text(att.date, 210, currentY, { width: 70 });
-      doc.text(att.checkInTime, 280, currentY, { width: 60 });
-      doc.text(`${att.latitude.toFixed(4)}, ${att.longitude.toFixed(4)}`, 340, currentY, { width: 120 });
+      doc.text(att.employeeId || '', 30, currentY, { width: 50 });
+      doc.text(att.userId ? att.userId.name : 'Unknown', 85, currentY, { width: 80 });
+      doc.text(att.date, 170, currentY, { width: 60 });
+      doc.text(att.checkInTime, 235, currentY, { width: 45 });
+      doc.text(`${att.latitude.toFixed(4)}, ${att.longitude.toFixed(4)}`, 285, currentY, { width: 80 });
+      // ✅ Added address with word wrapping
+      doc.text(att.address || 'Address unavailable', 370, currentY, { 
+        width: 400,
+        height: rowHeight - 5,
+        ellipsis: true
+      });
       
       currentY += rowHeight;
       
       if (index < attendance.length - 1) {
-        doc.moveTo(50, currentY - 2).lineTo(550, currentY - 2).stroke('#CCCCCC');
+        doc.moveTo(30, currentY - 2).lineTo(780, currentY - 2).stroke('#CCCCCC');
       }
     });
 
@@ -812,6 +825,7 @@ exports.exportAttendancePDF = async (req, res) => {
     }
   }
 };
+
 
 // @desc    Export attendance as JSON
 // @route   GET /api/admin/export/attendance/json
@@ -846,6 +860,7 @@ exports.exportAttendanceJSON = async (req, res) => {
         checkInTime: att.checkInTime,
         latitude: att.latitude,
         longitude: att.longitude,
+        address: att.address || 'Address unavailable', // ✅ Added address field
         selfieUrl: att.selfiePath,
         timestamp: att.timestamp
       }))

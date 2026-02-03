@@ -21,6 +21,10 @@ class AttendanceRepository(
         return dao.insert(attendance)
     }
 
+    suspend fun updateAttendance(attendance: AttendanceEntity) {
+        dao.update(attendance) // ✅ Added update function
+    }
+
     suspend fun getTodayAttendance(): List<AttendanceEntity> {
         val userId = sessionManager.getUserId() ?: return emptyList()
         return dao.getTodayAttendance(userId)
@@ -66,7 +70,18 @@ class AttendanceRepository(
                     )
 
                     if (response.isSuccessful && response.body()?.success == true) {
-                        dao.markAsSynced(attendance.id)
+                        val serverData = response.body()!!.data
+
+                        // ✅ Update with server's address before marking as synced
+                        if (serverData != null && serverData.address.isNotEmpty()) {
+                            val updatedAttendance = attendance.copy(
+                                address = serverData.address,
+                                isSynced = true
+                            )
+                            dao.update(updatedAttendance)
+                        } else {
+                            dao.markAsSynced(attendance.id)
+                        }
                         successCount++
                     } else {
                         failCount++
@@ -101,7 +116,7 @@ class AttendanceRepository(
                         selfiePath = serverData.selfiePath,
                         latitude = serverData.latitude,
                         longitude = serverData.longitude,
-                        address = serverData.address,
+                        address = serverData.address, // ✅ Now properly mapped
                         timestamp = serverData.timestamp.toLongOrNull() ?: System.currentTimeMillis(),
                         isSynced = true
                     )
