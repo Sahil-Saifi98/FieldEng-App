@@ -101,6 +101,7 @@ class AttendanceRepository(
                         selfiePath = serverData.selfiePath,
                         latitude = serverData.latitude,
                         longitude = serverData.longitude,
+                        address = serverData.address,
                         timestamp = serverData.timestamp.toLongOrNull() ?: System.currentTimeMillis(),
                         isSynced = true
                     )

@@ -24,6 +24,7 @@ data class AttendanceData(
     val selfiePath: String,
     val latitude: Double,
     val longitude: Double,
+    val address: String,
     val timestamp: String,
     val date: String,
     val checkInTime: String,

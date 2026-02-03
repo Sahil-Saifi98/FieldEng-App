@@ -12,6 +12,7 @@ data class AttendanceEntity(
     val selfiePath: String,
     val latitude: Double,
     val longitude: Double,
+    val address: String = "",
     val timestamp: Long,
     val isSynced: Boolean = false
 )

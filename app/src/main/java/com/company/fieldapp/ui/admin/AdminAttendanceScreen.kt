@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.ui.unit.sp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -409,6 +410,7 @@ fun EnhancedAttendanceCard(
                 Spacer(Modifier.height(4.dp))
 
                 // Location
+                // Location
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         Icons.Default.LocationOn,
@@ -417,11 +419,20 @@ fun EnhancedAttendanceCard(
                         tint = Color.Gray
                     )
                     Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = "${String.format("%.4f", attendance.latitude)}, ${String.format("%.4f", attendance.longitude)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray
-                    )
+                    Column {
+                        Text(
+                            text = attendance.address, // ⬅️ Display address
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF212121),
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = "${String.format("%.4f", attendance.latitude)}, ${String.format("%.4f", attendance.longitude)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray,
+                            fontSize = 10.sp
+                        )
+                    }
                 }
             }
 
@@ -495,14 +506,3 @@ fun ImageViewerDialog(
 }
 
 // Data class for attendance
-data class AdminAttendanceData(
-    val id: String,
-    val employeeName: String,
-    val employeeId: String,
-    val date: String,
-    val checkInTime: String,
-    val latitude: Double,
-    val longitude: Double,
-    val selfieUrl: String,
-    val isSynced: Boolean
-)

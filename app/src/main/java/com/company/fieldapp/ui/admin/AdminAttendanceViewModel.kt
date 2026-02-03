@@ -11,6 +11,19 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
+
+data class AdminAttendanceData(
+    val id: String,
+    val employeeName: String,
+    val employeeId: String,
+    val date: String,
+    val checkInTime: String,
+    val latitude: Double,
+    val longitude: Double,
+    val address: String,
+    val selfieUrl: String,
+    val isSynced: Boolean
+)
 class AdminAttendanceViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _attendanceList = MutableStateFlow<List<AdminAttendanceData>>(emptyList())
@@ -62,6 +75,7 @@ class AdminAttendanceViewModel(application: Application) : AndroidViewModel(appl
                                 checkInTime = convertUtcToIst(serverData.timestamp),
                                 latitude = serverData.latitude,
                                 longitude = serverData.longitude,
+                                address = serverData.address,
                                 selfieUrl = serverData.selfieUrl ?: serverData.selfiePath,
                                 isSynced = serverData.isSynced
                             )

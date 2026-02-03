@@ -31,6 +31,7 @@ data class AdminAttendanceItem(
     val selfieUrl: String? = null,
     val latitude: Double,
     val longitude: Double,
+    val address: String,
     val timestamp: String,
     val date: String,
     val checkInTime: String,

@@ -324,9 +324,8 @@ fun AttendanceScreen(
                                             style = MaterialTheme.typography.bodyLarge
                                         )
                                         Text(
-                                            text = "Lat: ${attendance.latitude}, Lng: ${attendance.longitude}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Color.Gray
+                                            text = "📍 ${attendance.address}",
+                                            style = MaterialTheme.typography.bodyMedium
                                         )
                                     }
 
