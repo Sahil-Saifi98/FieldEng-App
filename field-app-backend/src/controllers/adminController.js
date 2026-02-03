@@ -283,8 +283,8 @@ exports.exportUserData = async (req, res) => {
       });
     }
 
-    // Create CSV
-    let csvContent = 'Date,Check-in Time,Latitude,Longitude,Selfie Filename\n';
+    // ✅ Create CSV with Address column
+    let csvContent = 'Date,Check-in Time,Latitude,Longitude,Address,Selfie Filename\n';
     
     const selfiesDirectory = path.join(userTempDir, 'selfies');
     fs.mkdirSync(selfiesDirectory, { recursive: true });
@@ -296,7 +296,8 @@ exports.exportUserData = async (req, res) => {
       const filename = `selfie_${att.date}_${att.checkInTime.replace(/:/g, '-')}.jpg`;
       const filepath = path.join(selfiesDirectory, filename);
 
-      csvContent += `"${att.date}","${att.checkInTime}",${att.latitude},${att.longitude},"selfies/${filename}"\n`;
+      // ✅ Added address field to CSV
+      csvContent += `"${att.date}","${att.checkInTime}",${att.latitude},${att.longitude},"${att.address || 'Address unavailable'}","selfies/${filename}"\n`;
 
       // Download images for better data
       if (att.selfiePath) {
@@ -316,7 +317,8 @@ exports.exportUserData = async (req, res) => {
     for (let i = 100; i < attendance.length; i++) {
       const att = attendance[i];
       const filename = `selfie_${att.date}_${att.checkInTime.replace(/:/g, '-')}.jpg`;
-      csvContent += `"${att.date}","${att.checkInTime}",${att.latitude},${att.longitude},"${att.selfiePath}"\n`;
+      // ✅ Added address field to CSV
+      csvContent += `"${att.date}","${att.checkInTime}",${att.latitude},${att.longitude},"${att.address || 'Address unavailable'}","${att.selfiePath}"\n`;
     }
 
     console.log(`Downloaded ${downloadedCount} selfie images`);
@@ -455,7 +457,7 @@ exports.exportUserData = async (req, res) => {
       });
     });
 
-    // Cleanup after a delay
+    // Cleanup after a short delay
     setTimeout(() => {
       try {
         if (fs.existsSync(userTempDir)) {
@@ -535,8 +537,8 @@ exports.exportAllData = async (req, res) => {
       });
     }
 
-    // Create CSV only (no images for "all data" to prevent huge files)
-    let csvContent = 'Employee ID,Employee Name,Department,Designation,Date,Check-in Time,Latitude,Longitude,Selfie URL\n';
+    // ✅ Create CSV with Address column
+    let csvContent = 'Employee ID,Employee Name,Department,Designation,Date,Check-in Time,Latitude,Longitude,Address,Selfie URL\n';
     
     attendance.forEach(att => {
       csvContent += `"${att.employeeId}",`;
@@ -547,6 +549,7 @@ exports.exportAllData = async (req, res) => {
       csvContent += `"${att.checkInTime}",`;
       csvContent += `${att.latitude},`;
       csvContent += `${att.longitude},`;
+      csvContent += `"${att.address || 'Address unavailable'}",`; // ✅ Added address field
       csvContent += `"${att.selfiePath}"\n`;
     });
 
@@ -825,7 +828,6 @@ exports.exportAttendancePDF = async (req, res) => {
     }
   }
 };
-
 
 // @desc    Export attendance as JSON
 // @route   GET /api/admin/export/attendance/json
