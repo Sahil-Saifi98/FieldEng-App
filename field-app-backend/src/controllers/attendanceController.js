@@ -1,6 +1,7 @@
 const Attendance = require('../models/Attendance');
 const moment = require('moment');
 const { syncToSecondary } = require('../config/dbSync');
+const { getAddressFromCoordinates } = require('../utils/geocoder');
 
 // @desc    Submit attendance
 // @route   POST /api/attendance/submit
@@ -15,7 +16,6 @@ exports.submitAttendance = async (req, res) => {
       hasFile: !!req.file
     });
     
-    // Check if selfie file is uploaded
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -23,31 +23,33 @@ exports.submitAttendance = async (req, res) => {
       });
     }
 
-    // Parse timestamp
+    const lat = parseFloat(latitude);
+    const lng = parseFloat(longitude);
+    
+    // Get address from coordinates
+    const address = await getAddressFromCoordinates(lat, lng);
+    console.log('📍 Address:', address);
+
     const timestampDate = new Date(parseInt(timestamp));
     const date = moment(timestampDate).format('YYYY-MM-DD');
     const checkInTime = moment(timestampDate).format('HH:mm:ss');
+    const selfieUrl = req.file.path;
 
-    // File is uploaded to Cloudinary, req.file.path contains Cloudinary URL
-    const selfieUrl = req.file.path; // This is the Cloudinary URL
-
-    console.log('Selfie uploaded to Cloudinary:', selfieUrl);
-
-    // Create attendance record in primary DB
+    // Create attendance record with address
     const attendance = await Attendance.create({
       userId: req.user._id,
       employeeId: req.user.employeeId,
-      selfiePath: selfieUrl, // Store Cloudinary URL instead of local path
-      latitude: parseFloat(latitude),
-      longitude: parseFloat(longitude),
+      selfiePath: selfieUrl,
+      latitude: lat,
+      longitude: lng,
+      address: address, // ✅ Now populated
       timestamp: timestampDate,
       date: date,
       checkInTime: checkInTime
     });
 
-    console.log('✅ Attendance created:', attendance._id);
+    console.log('✅ Attendance created with address:', attendance._id);
 
-    // Sync to secondary database (HR database)
     syncToSecondary('Attendance', Attendance.schema, attendance.toObject());
 
     res.status(201).json({
@@ -63,7 +65,6 @@ exports.submitAttendance = async (req, res) => {
     });
   }
 };
-
 // @desc    Get today's attendance for logged in user only
 // @route   GET /api/attendance/today
 // @access  Private

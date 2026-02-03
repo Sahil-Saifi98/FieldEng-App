@@ -64,6 +64,7 @@ exports.getAllUsers = async (req, res) => {
 // @desc    Get all attendance records (Admin only)
 // @route   GET /api/admin/attendance
 // @access  Private/Admin
+// In your admin attendance query
 exports.getAllAttendance = async (req, res) => {
   try {
     const { startDate, endDate, employeeId } = req.query;
@@ -71,10 +72,7 @@ exports.getAllAttendance = async (req, res) => {
     let query = {};
     
     if (startDate && endDate) {
-      query.date = {
-        $gte: startDate,
-        $lte: endDate
-      };
+      query.date = { $gte: startDate, $lte: endDate };
     }
     
     if (employeeId) {
@@ -85,22 +83,13 @@ exports.getAllAttendance = async (req, res) => {
       .populate('userId', 'name employeeId email department designation')
       .sort({ timestamp: -1 });
 
-    const attendanceWithUrls = attendance.map(att => {
-      const attendanceObj = att.toObject();
-      return {
-        ...attendanceObj,
-        selfieUrl: attendanceObj.selfiePath,
-        userName: att.userId ? att.userId.name : 'Unknown User'
-      };
-    });
-
+    // Address is already in the attendance records
     res.status(200).json({
       success: true,
-      count: attendanceWithUrls.length,
-      data: attendanceWithUrls
+      count: attendance.length,
+      data: attendance // Address field included automatically
     });
   } catch (error) {
-    console.error('Get all attendance error:', error);
     res.status(500).json({
       success: false,
       message: error.message
