@@ -16,7 +16,7 @@ enum class Currency(val symbol: String, val code: String) {
     USD("$", "USD")
 }
 
-const val USD_TO_INR = 83.5  // Update as needed
+const val USD_TO_INR = 90.92  // Update as needed
 
 data class ExpenseUiState(
     val expenses: List<ExpenseEntity> = emptyList(),
