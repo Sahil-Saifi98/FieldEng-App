@@ -8,14 +8,14 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [AttendanceEntity::class, ExpenseEntity::class],  // Add ExpenseEntity
-    version = 3,  // Bump from 2 to 3
+    entities = [AttendanceEntity::class, ExpenseEntity::class],
+    version = 4,                    // ← bumped from 3 to 4
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun attendanceDao(): AttendanceDao
-    abstract fun expenseDao(): ExpenseDao  // Add this
+    abstract fun expenseDao(): ExpenseDao
 
     companion object {
         @Volatile
@@ -28,7 +28,6 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        // New migration: add expenses table
         private val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(database: SupportSQLiteDatabase) {
                 database.execSQL("""
@@ -49,6 +48,37 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // ← NEW: drops old expenses table, recreates with trip fields
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("DROP TABLE IF EXISTS expenses")
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS expenses (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        userId TEXT NOT NULL,
+                        employeeId TEXT NOT NULL,
+                        tripId TEXT NOT NULL,
+                        stationVisited TEXT NOT NULL,
+                        periodFrom TEXT NOT NULL,
+                        periodTo TEXT NOT NULL,
+                        advanceAmount REAL NOT NULL DEFAULT 0.0,
+                        expenseType TEXT NOT NULL,
+                        details TEXT NOT NULL DEFAULT '',
+                        travelFrom TEXT NOT NULL DEFAULT '',
+                        travelTo TEXT NOT NULL DEFAULT '',
+                        travelMode TEXT NOT NULL DEFAULT '',
+                        daysCount INTEGER NOT NULL DEFAULT 0,
+                        ratePerDay REAL NOT NULL DEFAULT 0.0,
+                        amount REAL NOT NULL,
+                        receiptImagePath TEXT,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        timestamp INTEGER NOT NULL,
+                        isSynced INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -56,7 +86,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "field_app_database"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)  // Add new migration
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4) // ← added MIGRATION_3_4
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

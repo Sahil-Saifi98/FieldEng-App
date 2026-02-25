@@ -24,6 +24,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -33,8 +34,10 @@ import com.company.fieldapp.data.local.ExpenseEntity
 import com.company.fieldapp.navigation.NavRoutes
 import java.io.File
 import java.text.DecimalFormat
+import java.text.SimpleDateFormat
+import java.util.*
 
-// ── Theme colours ────────────────────────────────────────────────
+// ── Theme ─────────────────────────────────────────────────────────
 private val Orange = Color(0xFFFF6B35)
 private val OrangeLight = Color(0xFFFFE5D9)
 private val GreenStatus = Color(0xFF4CAF50)
@@ -43,25 +46,76 @@ private val AmberStatus = Color(0xFFFFA000)
 private val AmberLight = Color(0xFFFFF8E1)
 private val Background = Color(0xFFF5F5F5)
 
-// ── Helpers ──────────────────────────────────────────────────────
-private fun formatAmount(amount: Double, currency: Currency): String {
+private fun fmt(amount: Double, currency: Currency): String {
     val df = DecimalFormat("#,##0.00")
     return "${currency.symbol}${df.format(amount)}"
 }
 
-/** Creates a temp file in the app cache and returns its URI via FileProvider */
 fun createReceiptImageUri(context: Context): Pair<Uri, String> {
     val dir = File(context.cacheDir, "receipts").also { it.mkdirs() }
     val file = File.createTempFile("receipt_", ".jpg", dir)
-    val uri = FileProvider.getUriForFile(
-        context,
-        "${context.packageName}.fileprovider",
-        file
-    )
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     return Pair(uri, file.absolutePath)
 }
 
-// ── Screen ───────────────────────────────────────────────────────
+// ── Date Picker Field ─────────────────────────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DatePickerField(
+    label: String,
+    value: String,
+    onDateSelected: (String) -> Unit
+) {
+    var showPicker by remember { mutableStateOf(false) }
+    val datePickerState = rememberDatePickerState()
+    val sdf = SimpleDateFormat("dd-MM-yyyy", Locale.getDefault())
+
+    OutlinedTextField(
+        value = value,
+        onValueChange = { },
+        readOnly = true,
+        label = { Text(label, style = MaterialTheme.typography.bodySmall) },
+        trailingIcon = {
+            IconButton(onClick = { showPicker = true }) {
+                Icon(Icons.Default.CalendarToday, null, tint = Orange, modifier = Modifier.size(18.dp))
+            }
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showPicker = true },
+        shape = RoundedCornerShape(10.dp),
+        textStyle = MaterialTheme.typography.bodySmall
+    )
+
+    if (showPicker) {
+        DatePickerDialog(
+            onDismissRequest = { showPicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    val millis = datePickerState.selectedDateMillis
+                    if (millis != null) onDateSelected(sdf.format(Date(millis)))
+                    showPicker = false
+                }) { Text("OK", color = Orange) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showPicker = false }) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            }
+        ) {
+            DatePicker(
+                state = datePickerState,
+                colors = DatePickerDefaults.colors(
+                    selectedDayContainerColor = Orange,
+                    todayDateBorderColor = Orange,
+                    selectedDayContentColor = Color.White
+                )
+            )
+        }
+    }
+}
+
+// ── Screen ────────────────────────────────────────────────────────
 @Composable
 fun ExpensesScreen(
     navController: NavHostController,
@@ -71,34 +125,30 @@ fun ExpensesScreen(
     val form by viewModel.form.collectAsState()
     val context = LocalContext.current
 
-    // Camera state
-    var captureUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingCameraItemId by remember { mutableStateOf<String?>(null) }
     var capturePath by remember { mutableStateOf<String?>(null) }
 
     val cameraLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.TakePicture()
+        ActivityResultContracts.TakePicture()
     ) { success ->
-        if (success && capturePath != null) {
-            viewModel.onReceiptCaptured(capturePath!!)
-        }
+        if (success && pendingCameraItemId != null && capturePath != null)
+            viewModel.onReceiptCaptured(pendingCameraItemId!!, capturePath!!)
+        pendingCameraItemId = null
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
+        ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) {
+        if (granted && pendingCameraItemId != null) {
             val (uri, path) = createReceiptImageUri(context)
-            captureUri = uri
             capturePath = path
             cameraLauncher.launch(uri)
         }
     }
 
-    fun launchCamera() {
-        val (uri, path) = createReceiptImageUri(context)
-        captureUri = uri
-        capturePath = path
-        cameraLauncher.launch(uri)
+    fun requestCamera(itemId: String) {
+        pendingCameraItemId = itemId
+        permissionLauncher.launch(android.Manifest.permission.CAMERA)
     }
 
     Scaffold(
@@ -150,7 +200,7 @@ fun ExpensesScreen(
                 contentPadding = PaddingValues(bottom = 24.dp)
             ) {
 
-                // ── Header ──────────────────────────────────────
+                // ── Header ───────────────────────────────────────
                 item {
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
@@ -158,9 +208,7 @@ fun ExpensesScreen(
                         tonalElevation = 2.dp
                     ) {
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
+                            modifier = Modifier.fillMaxWidth().padding(16.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -171,7 +219,7 @@ fun ExpensesScreen(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    "Submit and track your expenses",
+                                    "Submit and track your travel expenses",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = Color.Gray
                                 )
@@ -180,20 +228,13 @@ fun ExpensesScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Currency toggle pill
-                                CurrencyToggle(
-                                    currency = uiState.currency,
-                                    onToggle = viewModel::toggleCurrency
-                                )
-                                // Add button
+                                CurrencyToggle(uiState.currency, viewModel::toggleCurrency)
                                 FloatingActionButton(
                                     onClick = { viewModel.showAddForm() },
                                     containerColor = Orange,
                                     contentColor = Color.White,
                                     modifier = Modifier.size(48.dp)
-                                ) {
-                                    Icon(Icons.Default.Add, "Add Expense")
-                                }
+                                ) { Icon(Icons.Default.Add, "Add") }
                             }
                         }
                     }
@@ -202,76 +243,69 @@ fun ExpensesScreen(
                 // ── Summary cards ────────────────────────────────
                 item {
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         SummaryCard(
-                            label = "Pending",
-                            amount = viewModel.convertAmount(uiState.totalPending),
-                            currency = uiState.currency,
-                            iconTint = AmberStatus,
-                            iconBg = AmberLight,
-                            modifier = Modifier.weight(1f)
+                            "Pending",
+                            viewModel.convertAmount(uiState.totalPending),
+                            uiState.currency, AmberStatus, AmberLight,
+                            Modifier.weight(1f)
                         )
                         SummaryCard(
-                            label = "Approved",
-                            amount = viewModel.convertAmount(uiState.totalApproved),
-                            currency = uiState.currency,
-                            iconTint = GreenStatus,
-                            iconBg = GreenLight,
-                            modifier = Modifier.weight(1f)
+                            "Approved",
+                            viewModel.convertAmount(uiState.totalApproved),
+                            uiState.currency, GreenStatus, GreenLight,
+                            Modifier.weight(1f)
                         )
                     }
                 }
 
-                // ── Add form (animated) ──────────────────────────
+                // ── Trip form ────────────────────────────────────
                 item {
                     AnimatedVisibility(
                         visible = uiState.showAddForm,
                         enter = expandVertically() + fadeIn(),
                         exit = shrinkVertically() + fadeOut()
                     ) {
-                        AddExpenseForm(
+                        TripExpenseForm(
                             form = form,
                             currency = uiState.currency,
                             isLoading = uiState.isLoading,
                             errorMessage = uiState.errorMessage,
-                            onCategoryChange = viewModel::onCategoryChange,
-                            onAmountChange = viewModel::onAmountChange,
-                            onDateChange = viewModel::onDateChange,
-                            onDescriptionChange = viewModel::onDescriptionChange,
-                            onCaptureReceipt = {
-                                permissionLauncher.launch(android.Manifest.permission.CAMERA)
-                            },
+                            onStationChange = viewModel::onStationChange,
+                            onPeriodFromChange = viewModel::onPeriodFromChange,
+                            onPeriodToChange = viewModel::onPeriodToChange,
+                            onAdvanceChange = viewModel::onAdvanceChange,
+                            onUpdateItem = viewModel::updateLineItem,
+                            onAddItem = viewModel::addLineItem,
+                            onRemoveItem = viewModel::removeLineItem,
+                            onCaptureReceipt = { requestCamera(it) },
                             onClearReceipt = viewModel::clearReceipt,
-                            onSubmit = viewModel::submitExpense,
-                            onDismiss = viewModel::hideAddForm,
-                            onClearError = viewModel::clearError
+                            onSubmit = viewModel::submitTrip,
+                            onDismiss = viewModel::hideAddForm
                         )
                     }
                 }
 
-                // ── List header ──────────────────────────────────
+                // ── Trips list header ────────────────────────────
                 item {
                     Text(
-                        text = "Recent Expenses",
+                        "My Trips",
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                     )
                 }
 
-                // ── List / empty ─────────────────────────────────
-                if (uiState.expenses.isEmpty()) {
-                    item { EmptyExpensesState() }
+                if (uiState.trips.isEmpty()) {
+                    item { EmptyState() }
                 } else {
-                    items(uiState.expenses) { expense ->
-                        ExpenseItem(
-                            expense = expense,
+                    items(uiState.trips) { trip ->
+                        TripCard(
+                            trip = trip,
                             currency = uiState.currency,
-                            displayAmount = viewModel.convertAmount(expense.amount)
+                            onConvert = viewModel::convertAmount
                         )
                     }
                 }
@@ -280,7 +314,793 @@ fun ExpensesScreen(
     }
 }
 
-// ── Currency toggle ───────────────────────────────────────────────
+// ── Trip expense form ─────────────────────────────────────────────
+@Composable
+fun TripExpenseForm(
+    form: TripForm,
+    currency: Currency,
+    isLoading: Boolean,
+    errorMessage: String?,
+    onStationChange: (String) -> Unit,
+    onPeriodFromChange: (String) -> Unit,
+    onPeriodToChange: (String) -> Unit,
+    onAdvanceChange: (String) -> Unit,
+    onUpdateItem: (String, ExpenseLineItem) -> Unit,
+    onAddItem: () -> Unit,
+    onRemoveItem: (String) -> Unit,
+    onCaptureReceipt: (String) -> Unit,
+    onClearReceipt: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(4.dp)
+    ) {
+        Column(Modifier.padding(20.dp)) {
+
+            // Title row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Travel Expense Form",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, null)
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // ── Trip header section ───────────────────────────
+            Surface(
+                color = Color.White,
+                shape = RoundedCornerShape(12.dp),
+                border = BorderStroke(1.dp, Color(0xFFEEEEEE)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text(
+                        "Trip Details",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Orange
+                    )
+                    Spacer(Modifier.height(10.dp))
+
+                    // Station visited
+                    FormLabel("Station / Place Visited *")
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = form.stationVisited,
+                        onValueChange = onStationChange,
+                        placeholder = { Text("e.g. Mumbai, Delhi") },
+                        leadingIcon = {
+                            Icon(Icons.Default.LocationOn, null, tint = Color.Gray)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp)
+                    )
+
+                    Spacer(Modifier.height(10.dp))
+
+                    // Period From / To — date pickers
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            DatePickerField(
+                                label = "From",
+                                value = form.periodFrom,
+                                onDateSelected = onPeriodFromChange
+                            )
+                        }
+                        Column(Modifier.weight(1f)) {
+                            DatePickerField(
+                                label = "To",
+                                value = form.periodTo,
+                                onDateSelected = onPeriodToChange
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    // Advance / Imprest
+                    FormLabel("Advance / Imprest Taken")
+                    Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = form.advanceAmount,
+                        onValueChange = onAdvanceChange,
+                        placeholder = { Text("0.00") },
+                        leadingIcon = {
+                            Text(
+                                currency.symbol,
+                                fontWeight = FontWeight.Bold,
+                                color = Orange,
+                                modifier = Modifier.padding(start = 4.dp)
+                            )
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            Divider(color = Color(0xFFEEEEEE))
+            Spacer(Modifier.height(16.dp))
+
+            // ── Expense items ─────────────────────────────────
+            Text(
+                "Expense Items",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = Orange
+            )
+            Spacer(Modifier.height(10.dp))
+
+            form.items.forEachIndexed { index, item ->
+                ExpenseItemForm(
+                    item = item,
+                    index = index,
+                    currency = currency,
+                    canRemove = form.items.size > 1,
+                    onUpdate = { onUpdateItem(item.id, it) },
+                    onRemove = { onRemoveItem(item.id) },
+                    onCaptureReceipt = { onCaptureReceipt(item.id) },
+                    onClearReceipt = { onClearReceipt(item.id) }
+                )
+                if (index < form.items.lastIndex) {
+                    Spacer(Modifier.height(8.dp))
+                    Divider(color = Color(0xFFEEEEEE))
+                    Spacer(Modifier.height(8.dp))
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // Add item button
+            OutlinedButton(
+                onClick = onAddItem,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                border = BorderStroke(1.5.dp, Orange),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Orange)
+            ) {
+                Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Add Expense Item", fontWeight = FontWeight.SemiBold)
+            }
+
+            // ── Total / Payable summary ───────────────────────
+            val total = form.items.sumOf { item ->
+                item.amount.toDoubleOrNull() ?: 0.0
+            }
+            val advance = form.advanceAmount.toDoubleOrNull() ?: 0.0
+            val payable = total - advance
+
+            if (total > 0) {
+                Spacer(Modifier.height(12.dp))
+                Surface(
+                    color = OrangeLight,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+                            Text("Total", style = MaterialTheme.typography.bodyMedium, color = Orange)
+                            Text(fmt(total, currency), fontWeight = FontWeight.Bold, color = Orange)
+                        }
+                        if (advance > 0) {
+                            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+                                Text(
+                                    "Advance",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.Gray
+                                )
+                                Text(
+                                    "- ${fmt(advance, currency)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.Gray
+                                )
+                            }
+                            Divider(color = Orange.copy(alpha = 0.3f))
+                            Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween) {
+                                Text(
+                                    if (payable >= 0) "Payable" else "Refundable",
+                                    fontWeight = FontWeight.Bold,
+                                    color = Orange
+                                )
+                                Text(
+                                    fmt(kotlin.math.abs(payable), currency),
+                                    fontWeight = FontWeight.Bold,
+                                    color = Orange
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Error message
+            if (errorMessage != null) {
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    color = Color(0xFFFFEBEE),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Error, null,
+                            tint = Color(0xFFD32F2F),
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            errorMessage,
+                            color = Color(0xFFD32F2F),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // Submit button
+            Button(
+                onClick = onSubmit,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                enabled = !isLoading,
+                colors = ButtonDefaults.buttonColors(containerColor = Orange),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(22.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text(
+                        "Submit Trip Expenses",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── Single expense item inside form ──────────────────────────────
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ExpenseItemForm(
+    item: ExpenseLineItem,
+    index: Int,
+    currency: Currency,
+    canRemove: Boolean,
+    onUpdate: (ExpenseLineItem) -> Unit,
+    onRemove: () -> Unit,
+    onCaptureReceipt: () -> Unit,
+    onClearReceipt: () -> Unit
+) {
+    Column {
+        // Item header row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .background(OrangeLight, CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "${index + 1}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Orange
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Expense ${index + 1}",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            if (canRemove) {
+                IconButton(onClick = onRemove, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Default.RemoveCircleOutline, null,
+                        tint = Color(0xFFFF5252),
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Expense type selector
+        FormLabel("Type")
+        Spacer(Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            ExpenseType.entries.forEach { type ->
+                FilterChip(
+                    selected = item.expenseType == type,
+                    onClick = { onUpdate(item.copy(expenseType = type)) },
+                    label = { Text(type.label, style = MaterialTheme.typography.bodySmall) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = OrangeLight,
+                        selectedLabelColor = Orange
+                    )
+                )
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // ── Type-specific fields ──────────────────────────────
+        when (item.expenseType) {
+
+            ExpenseType.HOTEL -> {
+                // Hotel name/place + number of days + amount
+                OutlinedTextField(
+                    value = item.details,
+                    onValueChange = { onUpdate(item.copy(details = it)) },
+                    placeholder = { Text("Hotel name / place") },
+                    leadingIcon = {
+                        Icon(Icons.Default.LocationOn, null, tint = Color.Gray)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    textStyle = MaterialTheme.typography.bodySmall
+                )
+                Spacer(Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = item.daysCount,
+                        onValueChange = { onUpdate(item.copy(daysCount = it)) },
+                        placeholder = { Text("No. of days") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        shape = RoundedCornerShape(10.dp),
+                        textStyle = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = item.amount,
+                        onValueChange = { onUpdate(item.copy(amount = it)) },
+                        placeholder = { Text("Amount") },
+                        leadingIcon = {
+                            Text(
+                                currency.symbol,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Orange,
+                                modifier = Modifier.padding(start = 4.dp)
+                            )
+                        },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        shape = RoundedCornerShape(10.dp),
+                        textStyle = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+
+            ExpenseType.TRAVEL -> {
+                // From / To + mode + amount
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = item.travelFrom,
+                        onValueChange = { onUpdate(item.copy(travelFrom = it)) },
+                        placeholder = { Text("From") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp),
+                        textStyle = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = item.travelTo,
+                        onValueChange = { onUpdate(item.copy(travelTo = it)) },
+                        placeholder = { Text("To") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp),
+                        textStyle = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("Air", "Train", "Bus").forEach { mode ->
+                        FilterChip(
+                            selected = item.travelMode == mode,
+                            onClick = { onUpdate(item.copy(travelMode = mode)) },
+                            label = { Text(mode, style = MaterialTheme.typography.bodySmall) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = OrangeLight,
+                                selectedLabelColor = Orange
+                            )
+                        )
+                    }
+                }
+                Spacer(Modifier.height(6.dp))
+                AmountField(currency, item.amount) { onUpdate(item.copy(amount = it)) }
+            }
+
+            ExpenseType.DAILY_ALLOWANCE -> {
+                // Amount + notes only
+                AmountField(currency, item.amount) { onUpdate(item.copy(amount = it)) }
+            }
+
+            ExpenseType.LOCAL_CONVEYANCE -> {
+                // From / To + amount (no travel mode)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = item.travelFrom,
+                        onValueChange = { onUpdate(item.copy(travelFrom = it)) },
+                        placeholder = { Text("From") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp),
+                        textStyle = MaterialTheme.typography.bodySmall
+                    )
+                    OutlinedTextField(
+                        value = item.travelTo,
+                        onValueChange = { onUpdate(item.copy(travelTo = it)) },
+                        placeholder = { Text("To") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        shape = RoundedCornerShape(10.dp),
+                        textStyle = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                AmountField(currency, item.amount) { onUpdate(item.copy(amount = it)) }
+            }
+
+            ExpenseType.OTHER -> {
+                // Amount only — details field below handles description
+                AmountField(currency, item.amount) { onUpdate(item.copy(amount = it)) }
+            }
+        }
+
+        // Shared notes field (shown for all types, placeholder changes per type)
+        // Skip for HOTEL since details is already used for hotel name
+        if (item.expenseType != ExpenseType.HOTEL) {
+            Spacer(Modifier.height(6.dp))
+            OutlinedTextField(
+                value = item.details,
+                onValueChange = { onUpdate(item.copy(details = it)) },
+                placeholder = {
+                    Text(
+                        when (item.expenseType) {
+                            ExpenseType.TRAVEL -> "Ticket details / notes..."
+                            ExpenseType.DAILY_ALLOWANCE -> "Notes..."
+                            ExpenseType.LOCAL_CONVEYANCE -> "Vehicle type / notes..."
+                            ExpenseType.OTHER -> "Describe the expense..."
+                            else -> "Notes..."
+                        }
+                    )
+                },
+                modifier = Modifier.fillMaxWidth().height(72.dp),
+                maxLines = 2,
+                shape = RoundedCornerShape(10.dp),
+                textStyle = MaterialTheme.typography.bodySmall
+            )
+        }
+
+        // Receipt photo
+        Spacer(Modifier.height(8.dp))
+        if (item.receiptImagePath != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(140.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .border(1.dp, Orange, RoundedCornerShape(10.dp))
+            ) {
+                AsyncImage(
+                    model = File(item.receiptImagePath),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(alpha = 0.4f))
+                        .padding(4.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    TextButton(onClick = onCaptureReceipt) {
+                        Icon(
+                            Icons.Default.CameraAlt, null,
+                            tint = Color.White,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Retake", color = Color.White, style = MaterialTheme.typography.bodySmall)
+                    }
+                    TextButton(onClick = onClearReceipt) {
+                        Icon(
+                            Icons.Default.Delete, null,
+                            tint = Color(0xFFFF5252),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "Remove",
+                            color = Color(0xFFFF5252),
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+        } else {
+            Surface(
+                onClick = onCaptureReceipt,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(10.dp),
+                color = Color(0xFFF9F9F9),
+                border = BorderStroke(1.dp, Color.LightGray)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.CameraAlt, null,
+                        tint = Color.Gray,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "Attach Receipt",
+                        color = Color.Gray,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── Trip card (list item) ─────────────────────────────────────────
+@Composable
+fun TripCard(
+    trip: TripGroup,
+    currency: Currency,
+    onConvert: (Double) -> Double
+) {
+    val statusColor = when (trip.status) {
+        "approved" -> GreenStatus
+        "rejected" -> Color(0xFFD32F2F)
+        else -> AmberStatus
+    }
+    val statusBg = when (trip.status) {
+        "approved" -> GreenLight
+        "rejected" -> Color(0xFFFFEBEE)
+        else -> AmberLight
+    }
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 5.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(Modifier.padding(14.dp)) {
+
+            // Trip header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Surface(color = statusBg, shape = RoundedCornerShape(4.dp)) {
+                        Text(
+                            trip.status.uppercase(),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = statusColor,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.LocationOn, null,
+                            tint = Orange,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            trip.stationVisited,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Text(
+                        "${trip.periodFrom}  →  ${trip.periodTo}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                    Text(
+                        "${trip.items.size} expense item${if (trip.items.size > 1) "s" else ""}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        fmt(onConvert(trip.total), currency),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (trip.advanceAmount > 0) {
+                        Text(
+                            "Adv: ${fmt(onConvert(trip.advanceAmount), currency)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.Gray
+                        )
+                        val payable = trip.total - trip.advanceAmount
+                        Text(
+                            "${if (payable >= 0) "Pay:" else "Ref:"} ${fmt(onConvert(kotlin.math.abs(payable)), currency)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (payable >= 0) AmberStatus else GreenStatus,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            // Expand / collapse
+            TextButton(
+                onClick = { expanded = !expanded },
+                modifier = Modifier.padding(top = 4.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) {
+                Text(
+                    if (expanded) "Hide details" else "View details",
+                    color = Orange,
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    null, tint = Orange, modifier = Modifier.size(16.dp)
+                )
+            }
+
+            // Breakdown
+            AnimatedVisibility(expanded) {
+                Column(Modifier.fillMaxWidth()) {
+                    Divider(color = Color(0xFFEEEEEE))
+                    Spacer(Modifier.height(6.dp))
+                    trip.items.forEachIndexed { i, expense ->
+                        ExpenseBreakdownRow(expense, currency, onConvert)
+                        if (i < trip.items.lastIndex)
+                            Divider(
+                                color = Color(0xFFF5F5F5),
+                                modifier = Modifier.padding(vertical = 2.dp)
+                            )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ExpenseBreakdownRow(
+    expense: ExpenseEntity,
+    currency: Currency,
+    onConvert: (Double) -> Double
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                expense.expenseType,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
+            val sub = buildString {
+                if (expense.travelFrom.isNotBlank())
+                    append("${expense.travelFrom} → ${expense.travelTo}")
+                if (expense.travelMode.isNotBlank())
+                    append("  (${expense.travelMode})")
+                if (expense.daysCount > 0)
+                    append("  ${expense.daysCount} days")
+                if (expense.details.isNotBlank()) {
+                    if (isNotEmpty()) append("  ·  ")
+                    append(expense.details)
+                }
+            }
+            if (sub.isNotBlank())
+                Text(
+                    sub.trim(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.Gray,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+        }
+        Text(
+            fmt(onConvert(expense.amount), currency),
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+// ── Reusable composables ──────────────────────────────────────────
+@Composable
+fun AmountField(currency: Currency, value: String, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        placeholder = { Text("0.00") },
+        leadingIcon = {
+            Text(
+                currency.symbol,
+                fontWeight = FontWeight.SemiBold,
+                color = Orange,
+                modifier = Modifier.padding(start = 4.dp)
+            )
+        },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        shape = RoundedCornerShape(10.dp)
+    )
+}
+
 @Composable
 fun CurrencyToggle(currency: Currency, onToggle: () -> Unit) {
     Surface(
@@ -295,14 +1115,14 @@ fun CurrencyToggle(currency: Currency, onToggle: () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Text(
-                text = "₹",
+                "₹",
                 fontWeight = if (currency == Currency.INR) FontWeight.Bold else FontWeight.Normal,
                 color = if (currency == Currency.INR) Orange else Color.Gray,
                 style = MaterialTheme.typography.bodyMedium
             )
             Text("|", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
             Text(
-                text = "$",
+                "$",
                 fontWeight = if (currency == Currency.USD) FontWeight.Bold else FontWeight.Normal,
                 color = if (currency == Currency.USD) Orange else Color.Gray,
                 style = MaterialTheme.typography.bodyMedium
@@ -311,7 +1131,6 @@ fun CurrencyToggle(currency: Currency, onToggle: () -> Unit) {
     }
 }
 
-// ── Summary card ──────────────────────────────────────────────────
 @Composable
 fun SummaryCard(
     label: String,
@@ -325,12 +1144,10 @@ fun SummaryCard(
         modifier = modifier,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .background(iconBg, CircleShape),
+                    modifier = Modifier.size(32.dp).background(iconBg, CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -341,7 +1158,7 @@ fun SummaryCard(
                 }
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = label,
+                    label,
                     color = iconTint,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold
@@ -349,7 +1166,7 @@ fun SummaryCard(
             }
             Spacer(Modifier.height(8.dp))
             Text(
-                text = formatAmount(amount, currency),
+                fmt(amount, currency),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold
             )
@@ -357,400 +1174,30 @@ fun SummaryCard(
     }
 }
 
-// ── Add expense form ──────────────────────────────────────────────
 @Composable
-fun AddExpenseForm(
-    form: NewExpenseForm,
-    currency: Currency,
-    isLoading: Boolean,
-    errorMessage: String?,
-    onCategoryChange: (String) -> Unit,
-    onAmountChange: (String) -> Unit,
-    onDateChange: (String) -> Unit,
-    onDescriptionChange: (String) -> Unit,
-    onCaptureReceipt: () -> Unit,
-    onClearReceipt: () -> Unit,
-    onSubmit: () -> Unit,
-    onDismiss: () -> Unit,
-    onClearError: () -> Unit
-) {
-    val categories = listOf("Travel", "Meals", "Lodging", "Supplies", "Equipment", "Other")
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(4.dp)
-    ) {
-        Column(modifier = Modifier.padding(20.dp)) {
-
-            // Title row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "New Expense",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
-                )
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Default.Close, "Close")
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            // ── Category ─────────────────────────────────────
-            FormLabel("Category *")
-            Spacer(Modifier.height(8.dp))
-            val rows = categories.chunked(3)
-            rows.forEach { row ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    row.forEach { name ->
-                        CategoryChip(
-                            label = name,
-                            selected = form.category == name,
-                            onClick = { onCategoryChange(name) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                    repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
-                }
-                Spacer(Modifier.height(8.dp))
-            }
-
-            Spacer(Modifier.height(4.dp))
-
-            // ── Amount ───────────────────────────────────────
-            FormLabel("Amount *")
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = form.amount,
-                onValueChange = onAmountChange,
-                placeholder = { Text("0.00") },
-                leadingIcon = {
-                    Text(
-                        currency.symbol,
-                        style = MaterialTheme.typography.bodyLarge,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(start = 4.dp),
-                        color = Orange
-                    )
-                },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                shape = RoundedCornerShape(12.dp)
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            // ── Date ─────────────────────────────────────────
-            FormLabel("Date")
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = form.date,
-                onValueChange = onDateChange,
-                leadingIcon = { Icon(Icons.Default.CalendarToday, null, tint = Color.Gray) },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp)
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            // ── Description ──────────────────────────────────
-            FormLabel("Description")
-            Spacer(Modifier.height(8.dp))
-            OutlinedTextField(
-                value = form.description,
-                onValueChange = onDescriptionChange,
-                placeholder = { Text("Add notes...") },
-                leadingIcon = { Icon(Icons.Default.Notes, null, tint = Color.Gray) },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(100.dp),
-                maxLines = 4,
-                shape = RoundedCornerShape(12.dp)
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            // ── Receipt Photo ─────────────────────────────────
-            FormLabel("Receipt Photo")
-            Spacer(Modifier.height(8.dp))
-
-            if (form.receiptImagePath != null) {
-                // Show captured image with retake option
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(180.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .border(1.dp, Orange, RoundedCornerShape(12.dp))
-                ) {
-                    AsyncImage(
-                        model = File(form.receiptImagePath),
-                        contentDescription = "Receipt",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                    // Retake / clear button overlay
-                    Row(
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .background(Color.Black.copy(alpha = 0.45f))
-                            .padding(8.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly
-                    ) {
-                        TextButton(onClick = onCaptureReceipt) {
-                            Icon(
-                                Icons.Default.CameraAlt,
-                                null,
-                                tint = Color.White,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text("Retake", color = Color.White)
-                        }
-                        TextButton(onClick = onClearReceipt) {
-                            Icon(
-                                Icons.Default.Delete,
-                                null,
-                                tint = Color(0xFFFF5252),
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text("Remove", color = Color(0xFFFF5252))
-                        }
-                    }
-                }
-            } else {
-                // Camera capture button
-                Surface(
-                    onClick = onCaptureReceipt,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(80.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    color = Color(0xFFF9F9F9),
-                    border = BorderStroke(1.dp, Color.LightGray)
-                ) {
-                    Column(
-                        modifier = Modifier.fillMaxSize(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            Icons.Default.CameraAlt,
-                            null,
-                            tint = Color.Gray,
-                            modifier = Modifier.size(28.dp)
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "Capture Receipt",
-                            color = Color.Gray,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                }
-            }
-
-            // Error message
-            if (errorMessage != null) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = errorMessage,
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            // Submit
-            Button(
-                onClick = onSubmit,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-                enabled = !isLoading,
-                colors = ButtonDefaults.buttonColors(containerColor = Orange),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(22.dp),
-                        color = Color.White,
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Text(
-                        "Submit Expense",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-            }
-        }
-    }
-}
-
-// ── Category chip (text-only, clean) ─────────────────────────────
-@Composable
-fun CategoryChip(
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        onClick = onClick,
-        modifier = modifier,
-        shape = RoundedCornerShape(10.dp),
-        color = if (selected) OrangeLight else Color(0xFFF5F5F5),
-        border = if (selected) BorderStroke(1.5.dp, Orange) else BorderStroke(1.dp, Color(0xFFE0E0E0))
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 12.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (selected) Orange else Color(0xFF424242),
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
-            )
-        }
-    }
-}
-
-// ── Expense list item ─────────────────────────────────────────────
-@Composable
-fun ExpenseItem(
-    expense: ExpenseEntity,
-    currency: Currency,
-    displayAmount: Double
-) {
-    val statusColor = when (expense.status) {
-        "approved" -> GreenStatus
-        "rejected" -> Color(0xFFD32F2F)
-        else -> AmberStatus
-    }
-    val statusBg = when (expense.status) {
-        "approved" -> GreenLight
-        "rejected" -> Color(0xFFFFEBEE)
-        else -> AmberLight
-    }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Category initial badge
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .background(OrangeLight, RoundedCornerShape(12.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = expense.category.take(2).uppercase(),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = Orange
-                )
-            }
-
-            Spacer(Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Surface(color = statusBg, shape = RoundedCornerShape(4.dp)) {
-                    Text(
-                        text = expense.status.uppercase(),
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = statusColor,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = if (expense.description.isNotBlank()) expense.description
-                    else expense.category,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium
-                )
-                Text(
-                    text = expense.date,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
-            }
-
-            Text(
-                text = formatAmount(displayAmount, currency),
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-        }
-    }
-}
-
-// ── Helpers ───────────────────────────────────────────────────────
-@Composable
-private fun FormLabel(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.Medium
-    )
-}
-
-@Composable
-fun EmptyExpensesState() {
+fun EmptyState() {
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(48.dp),
+        modifier = Modifier.fillMaxWidth().padding(48.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(
-            Icons.Default.Receipt,
-            null,
-            modifier = Modifier.size(64.dp),
-            tint = Color.LightGray
-        )
+        Icon(Icons.Default.Receipt, null, modifier = Modifier.size(64.dp), tint = Color.LightGray)
         Spacer(Modifier.height(16.dp))
         Text(
-            "No expenses yet",
+            "No trips submitted yet",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = Color.Gray
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "Tap + to submit your first expense",
+            "Tap + to submit your travel expenses",
             style = MaterialTheme.typography.bodyMedium,
             color = Color.LightGray
         )
     }
+}
+
+@Composable
+private fun FormLabel(text: String) {
+    Text(text, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Medium)
 }

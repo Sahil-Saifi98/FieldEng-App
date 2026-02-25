@@ -12,17 +12,17 @@ interface ExpenseDao {
     @Update
     suspend fun update(expense: ExpenseEntity)
 
-    @Delete
-    suspend fun delete(expense: ExpenseEntity)
-
+    // All expenses for user, newest first
     @Query("SELECT * FROM expenses WHERE userId = :userId ORDER BY timestamp DESC")
     fun getAllExpenses(userId: String): Flow<List<ExpenseEntity>>
 
-    @Query("SELECT * FROM expenses WHERE userId = :userId AND isSynced = 0")
-    suspend fun getUnsyncedExpenses(userId: String): List<ExpenseEntity>
+    // Get all items belonging to one trip submission
+    @Query("SELECT * FROM expenses WHERE tripId = :tripId AND userId = :userId")
+    suspend fun getExpensesByTrip(tripId: String, userId: String): List<ExpenseEntity>
 
-    @Query("SELECT * FROM expenses WHERE userId = :userId AND status = 'pending'")
-    fun getPendingExpenses(userId: String): Flow<List<ExpenseEntity>>
+    // Distinct trip IDs for building the grouped list
+    @Query("SELECT DISTINCT tripId FROM expenses WHERE userId = :userId ORDER BY timestamp DESC")
+    fun getDistinctTripIds(userId: String): Flow<List<String>>
 
     @Query("SELECT SUM(amount) FROM expenses WHERE userId = :userId AND status = 'pending'")
     suspend fun getTotalPending(userId: String): Double?
