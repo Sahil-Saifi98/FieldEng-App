@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AttendanceEntity::class, ExpenseEntity::class],
-    version = 4,                    // ← bumped from 3 to 4
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -48,7 +48,6 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        // ← NEW: drops old expenses table, recreates with trip fields
         private val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(database: SupportSQLiteDatabase) {
                 database.execSQL("DROP TABLE IF EXISTS expenses")
@@ -79,6 +78,14 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        // Adds serverId and receiptUrl columns for backend sync
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE expenses ADD COLUMN serverId TEXT NOT NULL DEFAULT ''")
+                database.execSQL("ALTER TABLE expenses ADD COLUMN receiptUrl TEXT")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
@@ -86,7 +93,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "field_app_database"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4) // ← added MIGRATION_3_4
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

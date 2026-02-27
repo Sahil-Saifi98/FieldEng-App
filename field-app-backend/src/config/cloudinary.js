@@ -5,31 +5,36 @@ cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
-  timeout: 120000 // ← 2 minutes instead of default 60s
+  timeout: 120000  // 2 min — prevents timeout on slow connections
 });
 
-// Selfie storage — compress more aggressively for slow connections
+// Selfies — fieldapp/selfies
 const selfieStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
     folder: 'fieldapp/selfies',
     allowed_formats: ['jpg', 'jpeg', 'png'],
     transformation: [
-      { width: 600, height: 600, crop: 'limit' }, // ← reduced from 800
-      { quality: 'auto:low' }                      // ← auto compress
+      { width: 600, height: 600, crop: 'limit' },
+      { quality: 'auto:low' }
     ]
   }
 });
 
+// Expense receipts — fieldapp/receipts (separate from selfies)
 const expenseStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {
-    folder: 'fieldapp/expenses',
+    folder: 'fieldapp/receipts',           // ← separate folder
     allowed_formats: ['jpg', 'jpeg', 'png', 'pdf'],
-    transformation: [{ quality: 'auto:low' }]
+    transformation: [
+      { width: 1200, crop: 'limit' },      // keep readable for admin review
+      { quality: 'auto:good' }             // better quality than selfies
+    ]
   }
 });
 
+// Task attachments — fieldapp/tasks
 const taskStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
   params: {

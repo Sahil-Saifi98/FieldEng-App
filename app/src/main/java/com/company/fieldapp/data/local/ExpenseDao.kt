@@ -12,26 +12,25 @@ interface ExpenseDao {
     @Update
     suspend fun update(expense: ExpenseEntity)
 
-    // All expenses for user, newest first
     @Query("SELECT * FROM expenses WHERE userId = :userId ORDER BY timestamp DESC")
     fun getAllExpenses(userId: String): Flow<List<ExpenseEntity>>
 
-    // Get all items belonging to one trip submission
     @Query("SELECT * FROM expenses WHERE tripId = :tripId AND userId = :userId")
     suspend fun getExpensesByTrip(tripId: String, userId: String): List<ExpenseEntity>
 
-    // Distinct trip IDs for building the grouped list
-    @Query("SELECT DISTINCT tripId FROM expenses WHERE userId = :userId ORDER BY timestamp DESC")
-    fun getDistinctTripIds(userId: String): Flow<List<String>>
+    // For auto-sync on startup — distinct unsynced trip IDs
+    @Query("SELECT DISTINCT tripId FROM expenses WHERE userId = :userId AND isSynced = 0")
+    suspend fun getUnsyncedTripIds(userId: String): List<String>
 
-    @Query("SELECT SUM(amount) FROM expenses WHERE userId = :userId AND status = 'pending'")
-    suspend fun getTotalPending(userId: String): Double?
+    // Fetch all items of a trip (used during sync)
+    @Query("SELECT * FROM expenses WHERE tripId = :tripId")
+    suspend fun getItemsByTripId(tripId: String): List<ExpenseEntity>
 
-    @Query("SELECT SUM(amount) FROM expenses WHERE userId = :userId AND status = 'approved'")
-    suspend fun getTotalApproved(userId: String): Double?
+    @Query("UPDATE expenses SET isSynced = 1, serverId = :serverId WHERE tripId = :tripId")
+    suspend fun markTripSynced(tripId: String, serverId: String)
 
-    @Query("UPDATE expenses SET isSynced = 1 WHERE id = :id")
-    suspend fun markAsSynced(id: Long)
+    @Query("UPDATE expenses SET status = :status WHERE tripId = :tripId")
+    suspend fun updateTripStatus(tripId: String, status: String)
 
     @Query("DELETE FROM expenses WHERE userId = :userId")
     suspend fun deleteAllForUser(userId: String)

@@ -10,23 +10,25 @@ data class ExpenseEntity(
     val userId: String,
     val employeeId: String,
 
-    // ── Trip header (shared across items submitted together) ──
-    val tripId: String,              // UUID — groups items from same submission
-    val stationVisited: String,      // Place/destination
-    val periodFrom: String,          // "DD-MM-YYYY"
-    val periodTo: String,            // "DD-MM-YYYY"
-    val advanceAmount: Double = 0.0, // Advance/Imprest taken
+    // ── Trip header ───────────────────────────────────────────
+    val tripId: String,
+    val serverId: String = "",           // MongoDB _id after sync
+    val stationVisited: String,
+    val periodFrom: String,
+    val periodTo: String,
+    val advanceAmount: Double = 0.0,
 
     // ── Expense line ──────────────────────────────────────────
-    val expenseType: String,         // Hotel, Travel, DailyAllowance, LocalConveyance, Other
-    val details: String = "",        // description / details
-    val travelFrom: String = "",     // Travel specific
+    val expenseType: String,
+    val details: String = "",
+    val travelFrom: String = "",
     val travelTo: String = "",
-    val travelMode: String = "",     // Air / Train / Bus
-    val daysCount: Int = 0,          // Daily allowance
+    val travelMode: String = "",
+    val daysCount: Int = 0,
     val ratePerDay: Double = 0.0,
     val amount: Double,
-    val receiptImagePath: String? = null,
+    val receiptImagePath: String? = null, // local file path
+    val receiptUrl: String? = null,       // Cloudinary URL after upload
 
     val status: String = "pending",
     val timestamp: Long = System.currentTimeMillis(),
