@@ -2,6 +2,50 @@ const Attendance = require('../models/Attendance');
 const moment = require('moment');
 const { syncToSecondary } = require('../config/dbSync');
 const { getAddressFromCoordinates } = require('../utils/geocoder');
+const { cloudinary } = require('../config/cloudinary');
+
+// Helper: upload buffer to Cloudinary with retry
+const uploadToCloudinaryWithRetry = async (file, retries = 3) => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`☁️ Cloudinary upload attempt ${attempt}/${retries}`);
+
+      // If file already has a Cloudinary path (multer-storage-cloudinary succeeded)
+      if (file.path && file.path.startsWith('http')) {
+        console.log('✅ File already uploaded by multer-storage-cloudinary');
+        return file.path;
+      }
+
+      // Manual fallback upload using buffer
+      const result = await new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+          {
+            folder: 'fieldapp/selfies',
+            transformation: [
+              { width: 600, height: 600, crop: 'limit' },
+              { quality: 'auto:low' }
+            ],
+            timeout: 120000
+          },
+          (error, result) => {
+            if (error) reject(error);
+            else resolve(result);
+          }
+        );
+        uploadStream.end(file.buffer);
+      });
+
+      console.log(`✅ Cloudinary upload succeeded on attempt ${attempt}`);
+      return result.secure_url;
+
+    } catch (err) {
+      console.error(`❌ Cloudinary attempt ${attempt} failed:`, err?.message || err);
+      if (attempt === retries) throw err;
+      // Wait before retry (1s, 2s, 3s)
+      await new Promise(r => setTimeout(r, attempt * 1000));
+    }
+  }
+};
 
 // @desc    Submit attendance
 // @route   POST /api/attendance/submit
@@ -9,7 +53,7 @@ const { getAddressFromCoordinates } = require('../utils/geocoder');
 exports.submitAttendance = async (req, res) => {
   try {
     const { latitude, longitude, timestamp } = req.body;
-    
+
     console.log('📥 Received attendance submission:', {
       userId: req.user._id,
       employeeId: req.user.employeeId,
@@ -18,7 +62,7 @@ exports.submitAttendance = async (req, res) => {
       timestamp,
       hasFile: !!req.file
     });
-    
+
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -28,38 +72,46 @@ exports.submitAttendance = async (req, res) => {
 
     const lat = parseFloat(latitude);
     const lng = parseFloat(longitude);
-    
-    // Validate coordinates
+
     if (isNaN(lat) || isNaN(lng)) {
       return res.status(400).json({
         success: false,
         message: 'Invalid coordinates provided'
       });
     }
-    
-    // Get address from coordinates (with fallback)
-    let address = 'Address unavailable';
+
+    // Upload to Cloudinary with retry
+    let selfieUrl;
+    try {
+      selfieUrl = await uploadToCloudinaryWithRetry(req.file);
+    } catch (uploadError) {
+      console.error('❌ All Cloudinary upload attempts failed:', uploadError?.message || uploadError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to upload selfie. Please check your internet connection and try again.'
+      });
+    }
+
+    // Get address with fallback
+    let address = `${lat}, ${lng}`;
     try {
       address = await getAddressFromCoordinates(lat, lng);
       console.log('📍 Address:', address);
     } catch (geoError) {
-      console.error('⚠️ Geocoding failed, using fallback:', geoError.message);
-      address = `Location: ${lat}, ${lng}`;
+      console.error('⚠️ Geocoding failed, using coordinates:', geoError.message);
     }
 
     const timestampDate = new Date(parseInt(timestamp));
     const date = moment(timestampDate).format('YYYY-MM-DD');
     const checkInTime = moment(timestampDate).format('HH:mm:ss');
-    const selfieUrl = req.file.path;
 
-    // Create attendance record with address
     const attendance = await Attendance.create({
       userId: req.user._id,
       employeeId: req.user.employeeId,
       selfiePath: selfieUrl,
       latitude: lat,
       longitude: lng,
-      address: address, // ✅ Now populated with fallback
+      address: address,
       timestamp: timestampDate,
       date: date,
       checkInTime: checkInTime
@@ -71,84 +123,66 @@ exports.submitAttendance = async (req, res) => {
       address: attendance.address
     });
 
-    // Sync to secondary database
-    syncToSecondary('Attendance', Attendance.schema, attendance.toObject());
+    // Sync to secondary (non-blocking — don't fail if this fails)
+    syncToSecondary('Attendance', Attendance.schema, attendance.toObject())
+      .catch(err => console.error('⚠️ Secondary sync failed (non-critical):', err.message));
 
     res.status(201).json({
       success: true,
       message: 'Attendance submitted successfully',
       data: attendance
     });
+
   } catch (error) {
-    console.error('❌ Attendance submission error:', error);
+    console.error('❌ Attendance submission error:', error?.message || error);
     res.status(500).json({
       success: false,
-      message: error.message
+      message: error?.message || 'Server error. Please try again.'
     });
   }
 };
 
-// @desc    Get today's attendance for logged in user only
+// @desc    Get today's attendance
 // @route   GET /api/attendance/today
 // @access  Private
 exports.getTodayAttendance = async (req, res) => {
   try {
     const today = moment().format('YYYY-MM-DD');
-    
-    // IMPORTANT: Filter by current user's ID
     const attendance = await Attendance.find({
       userId: req.user._id,
       date: today
     }).sort({ timestamp: -1 });
 
-    console.log(`Found ${attendance.length} attendance records for user ${req.user.employeeId} today`);
-
     res.status(200).json({
       success: true,
       count: attendance.length,
       data: attendance
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Get attendance by date range for logged in user only
-// @route   GET /api/attendance?startDate=YYYY-MM-DD&endDate=YYYY-MM-DD
+// @desc    Get attendance by date range
+// @route   GET /api/attendance
 // @access  Private
 exports.getAttendance = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    
-    // IMPORTANT: Always filter by current user's ID
     let query = { userId: req.user._id };
-    
+
     if (startDate && endDate) {
-      query.date = {
-        $gte: startDate,
-        $lte: endDate
-      };
+      query.date = { $gte: startDate, $lte: endDate };
     }
 
     const attendance = await Attendance.find(query).sort({ timestamp: -1 });
-
-    res.status(200).json({
-      success: true,
-      count: attendance.length,
-      data: attendance
-    });
+    res.status(200).json({ success: true, count: attendance.length, data: attendance });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// @desc    Get attendance statistics for logged in user only
+// @desc    Get attendance statistics
 // @route   GET /api/attendance/stats
 // @access  Private
 exports.getAttendanceStats = async (req, res) => {
@@ -156,36 +190,18 @@ exports.getAttendanceStats = async (req, res) => {
     const today = moment().format('YYYY-MM-DD');
     const thisMonth = moment().format('YYYY-MM');
 
-    // IMPORTANT: Count only current user's records
-    const todayCount = await Attendance.countDocuments({
-      userId: req.user._id,
-      date: today
-    });
-
-    const monthCount = await Attendance.countDocuments({
-      userId: req.user._id,
-      date: { $regex: `^${thisMonth}` }
-    });
-
-    const totalCount = await Attendance.countDocuments({
-      userId: req.user._id
-    });
-
-    console.log(`Stats for ${req.user.employeeId}: today=${todayCount}, month=${monthCount}, total=${totalCount}`);
+    const [todayCount, monthCount, totalCount] = await Promise.all([
+      Attendance.countDocuments({ userId: req.user._id, date: today }),
+      Attendance.countDocuments({ userId: req.user._id, date: { $regex: `^${thisMonth}` } }),
+      Attendance.countDocuments({ userId: req.user._id })
+    ]);
 
     res.status(200).json({
       success: true,
-      data: {
-        today: todayCount,
-        thisMonth: monthCount,
-        total: totalCount
-      }
+      data: { today: todayCount, thisMonth: monthCount, total: totalCount }
     });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
@@ -197,30 +213,16 @@ exports.deleteAttendance = async (req, res) => {
     const attendance = await Attendance.findById(req.params.id);
 
     if (!attendance) {
-      return res.status(404).json({
-        success: false,
-        message: 'Attendance record not found'
-      });
+      return res.status(404).json({ success: false, message: 'Attendance record not found' });
     }
 
-    // Check if attendance belongs to user
     if (attendance.userId.toString() !== req.user._id.toString()) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to delete this record'
-      });
+      return res.status(403).json({ success: false, message: 'Not authorized' });
     }
 
     await attendance.deleteOne();
-
-    res.status(200).json({
-      success: true,
-      message: 'Attendance record deleted successfully'
-    });
+    res.status(200).json({ success: true, message: 'Attendance record deleted successfully' });
   } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: error.message
-    });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
