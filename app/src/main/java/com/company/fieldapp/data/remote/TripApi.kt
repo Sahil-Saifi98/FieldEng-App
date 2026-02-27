@@ -90,20 +90,21 @@ interface TripApi {
         @Body request: TripSubmitRequest
     ): Response<TripResponse>
 
-    // Multipart submit (with receipt images)
-    // FIX: @PartMap cannot hold MultipartBody.Part values.
-    // Use @Part List<MultipartBody.Part> instead — each Part already carries
-    // its own field name (set via MultipartBody.Part.createFormData) so Retrofit
-    // will forward them correctly as receipt_0, receipt_1, etc.
+    // Multipart submit (with receipt images).
+    // All receipt files use field name "receipts" to satisfy Multer's
+    // uploadExpense.array('receipts', 10). The expense array index is
+    // encoded in each file's filename as "expIdx_{n}_{timestamp}.jpg"
+    // so the server can map receipts to the correct expense slot even
+    // when not every expense has a receipt attached.
     @Multipart
     @POST("trips/submit")
     suspend fun submitTripWithReceipts(
         @Part("stationVisited") stationVisited: RequestBody,
-        @Part("periodFrom") periodFrom: RequestBody,
-        @Part("periodTo") periodTo: RequestBody,
-        @Part("advanceAmount") advanceAmount: RequestBody,
-        @Part("expenses") expenses: RequestBody,
-        @Part receipts: List<MultipartBody.Part>   // ✅ was: @PartMap Map<String, MultipartBody.Part>
+        @Part("periodFrom")     periodFrom: RequestBody,
+        @Part("periodTo")       periodTo: RequestBody,
+        @Part("advanceAmount")  advanceAmount: RequestBody,
+        @Part("expenses")       expenses: RequestBody,
+        @Part receipts: List<MultipartBody.Part>
     ): Response<TripResponse>
 
     @GET("trips")

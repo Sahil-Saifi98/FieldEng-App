@@ -11,7 +11,7 @@ exports.submitTrip = async (req, res) => {
       periodFrom,
       periodTo,
       advanceAmount,
-      expenses // array of line items
+      expenses // JSON string in multipart, parsed object in application/json
     } = req.body;
 
     if (!stationVisited || !periodFrom || !periodTo) {
@@ -21,58 +21,94 @@ exports.submitTrip = async (req, res) => {
       });
     }
 
-    if (!expenses || !Array.isArray(expenses) || expenses.length === 0) {
+    // expenses arrives as a JSON string when sent via multipart/form-data
+    let parsedExpenses;
+    try {
+      parsedExpenses = typeof expenses === 'string' ? JSON.parse(expenses) : expenses;
+    } catch (e) {
+      return res.status(400).json({ success: false, message: 'Invalid expenses JSON' });
+    }
+
+    if (!parsedExpenses || !Array.isArray(parsedExpenses) || parsedExpenses.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'At least one expense item is required'
       });
     }
 
-    // Handle receipt images if uploaded (multipart)
-    // Map uploaded files to their expense index
-    const receiptUrls = {};
+    // ── Receipt → Expense mapping ─────────────────────────────────────────────
+    //
+    // HOW IT WORKS (safe for multi-user concurrent requests):
+    //
+    // Each request is fully isolated by Express/Multer — req.files only contains
+    // the files from THIS request, never mixed with another user's upload.
+    //
+    // Within a single request we still need to know WHICH expense each receipt
+    // belongs to, because not every expense has a receipt (sparse case).
+    //
+    // The Android app encodes the expense array index into the filename:
+    //   "expIdx_{expenseIndex}_{timestamp}.jpg"
+    //   e.g. "expIdx_2_1709040123456.jpg"  → belongs to parsedExpenses[2]
+    //
+    // We parse that prefix here to build a Map<expenseIndex, cloudinaryUrl>
+    // and then assign receipts to the correct expense slot.
+    // If the filename doesn't have the prefix (e.g. retried upload from an
+    // older app version) we fall back to sequential assignment so old data
+    // still works.
+    //
+    const receiptMap = {}; // { expenseIndex: cloudinaryUrl }
+
     if (req.files && req.files.length > 0) {
+      let fallbackIndex = 0;
+
       req.files.forEach(file => {
-        // Field name format: receipt_0, receipt_1, etc.
-        const match = file.fieldname.match(/receipt_(\d+)/);
+        const url = file.path; // Cloudinary secure URL set by multer-storage-cloudinary
+
+        // Try to parse "expIdx_{n}_{timestamp}.jpg" from the original filename
+        const match = file.originalname.match(/^expIdx_(\d+)_/);
         if (match) {
-          receiptUrls[parseInt(match[1])] = file.path; // Cloudinary URL
+          const expenseIndex = parseInt(match[1], 10);
+          receiptMap[expenseIndex] = url;
+        } else {
+          // Fallback: assign sequentially (handles retries from older app builds)
+          receiptMap[fallbackIndex] = url;
+          fallbackIndex++;
         }
       });
     }
 
-    // Build expense items with receipt URLs
-    const expenseItems = expenses.map((item, index) => ({
+    // Build expense items with correctly mapped receipt URLs
+    const expenseItems = parsedExpenses.map((item, index) => ({
       expenseType: item.expenseType,
-      details: item.details || '',
-      travelFrom: item.travelFrom || '',
-      travelTo: item.travelTo || '',
-      travelMode: item.travelMode || '',
-      daysCount: parseInt(item.daysCount) || 0,
-      ratePerDay: parseFloat(item.ratePerDay) || 0,
-      amount: parseFloat(item.amount) || 0,
-      receiptUrl: receiptUrls[index] || null
+      details:     item.details     || '',
+      travelFrom:  item.travelFrom  || '',
+      travelTo:    item.travelTo    || '',
+      travelMode:  item.travelMode  || '',
+      daysCount:   parseInt(item.daysCount)    || 0,
+      ratePerDay:  parseFloat(item.ratePerDay) || 0,
+      amount:      parseFloat(item.amount)     || 0,
+      receiptUrl:  receiptMap[index] || null   // null if this expense has no receipt
     }));
 
-    const totalAmount = expenseItems.reduce((sum, e) => sum + e.amount, 0);
-    const advance = parseFloat(advanceAmount) || 0;
+    const totalAmount   = expenseItems.reduce((sum, e) => sum + e.amount, 0);
+    const advance       = parseFloat(advanceAmount) || 0;
     const payableAmount = totalAmount - advance;
 
     const trip = await Trip.create({
-      userId: req.user._id,
-      employeeId: req.user.employeeId,
-      employeeName: req.user.name,
-      designation: req.user.designation || '',
+      userId:        req.user._id,
+      employeeId:    req.user.employeeId,
+      employeeName:  req.user.name,
+      designation:   req.user.designation || '',
       stationVisited,
       periodFrom,
       periodTo,
       advanceAmount: advance,
-      expenses: expenseItems,
+      expenses:      expenseItems,
       totalAmount,
       payableAmount
     });
 
-    console.log(`✅ Trip submitted: ${trip._id} by ${req.user.employeeId} to ${stationVisited}`);
+    console.log(`✅ Trip submitted: ${trip._id} by ${req.user.employeeId} (${req.user.name}) → ${stationVisited} | items: ${expenseItems.length} | receipts: ${Object.keys(receiptMap).length}`);
 
     // Non-blocking sync to secondary DB
     syncToSecondary('Trip', Trip.schema, trip.toObject())
@@ -118,7 +154,7 @@ exports.getTrip = async (req, res) => {
   try {
     const trip = await Trip.findOne({
       _id: req.params.id,
-      userId: req.user._id
+      userId: req.user._id  // scoped to the requesting user — no cross-user access
     });
 
     if (!trip) {
@@ -151,9 +187,9 @@ exports.getTripStats = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        totalPending: pending[0]?.total || 0,
-        totalApproved: approved[0]?.total || 0,
-        tripCount: total
+        totalPending:   pending[0]?.total  || 0,
+        totalApproved:  approved[0]?.total || 0,
+        tripCount:      total
       }
     });
   } catch (error) {
@@ -171,7 +207,7 @@ exports.getAllTrips = async (req, res) => {
     const { status, employeeId, page = 1, limit = 20 } = req.query;
 
     const query = {};
-    if (status) query.status = status;
+    if (status)     query.status     = status;
     if (employeeId) query.employeeId = employeeId;
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -188,9 +224,9 @@ exports.getAllTrips = async (req, res) => {
       success: true,
       count: trips.length,
       total,
-      page: parseInt(page),
+      page:  parseInt(page),
       pages: Math.ceil(total / parseInt(limit)),
-      data: trips
+      data:  trips
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -215,9 +251,9 @@ exports.updateTripStatus = async (req, res) => {
       req.params.id,
       {
         status,
-        adminNote: adminNote || '',
-        reviewedBy: req.user._id,
-        reviewedAt: new Date()
+        adminNote:   adminNote || '',
+        reviewedBy:  req.user._id,
+        reviewedAt:  new Date()
       },
       { new: true }
     );
@@ -228,7 +264,6 @@ exports.updateTripStatus = async (req, res) => {
 
     console.log(`✅ Trip ${trip._id} ${status} by admin ${req.user.employeeId}`);
 
-    // Sync updated status to secondary
     syncToSecondary('Trip', Trip.schema, trip.toObject())
       .catch(err => console.error('⚠️ Secondary sync failed:', err?.message));
 
@@ -260,9 +295,9 @@ exports.getAdminTripStats = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        pending: pendingCount,
-        approved: approvedCount,
-        rejected: rejectedCount,
+        pending:             pendingCount,
+        approved:            approvedCount,
+        rejected:            rejectedCount,
         totalApprovedAmount: totalAmount[0]?.total || 0
       }
     });

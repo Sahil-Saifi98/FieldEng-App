@@ -71,7 +71,6 @@ data class TripGroup(
 
 data class ExpenseUiState(
     val trips: List<TripGroup> = emptyList(),
-    // Pending = payable amount only (total - advance already paid)
     val totalPending: Double = 0.0,
     val totalApproved: Double = 0.0,
     val isLoading: Boolean = false,
@@ -97,7 +96,7 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
 
     init {
         loadExpenses()
-        syncUnsyncedTrips() // Auto-sync pending records on startup
+        syncUnsyncedTrips()
     }
 
     // ── Load & group from local DB ────────────────────────────────
@@ -123,8 +122,6 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
                     }
                     .sortedByDescending { it.items.first().timestamp }
 
-                // Pending card shows payable amount only (advance already paid)
-                // e.g. total=5000, advance=2000 → pending shows 3000, not 5000
                 val totalPending = groups
                     .filter { it.status == "pending" }
                     .sumOf { trip ->
@@ -244,7 +241,7 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
 
                 _uiState.update { it.copy(showAddForm = false) }
 
-                // 2. Try server immediately (non-blocking if fails)
+                // 2. Try server immediately
                 submitTripToServer(tripId, f, savedItems)
 
             } catch (e: Exception) {
@@ -278,7 +275,6 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
                 _uiState.update { it.copy(syncMessage = "Trip submitted successfully") }
             }
         } catch (e: Exception) {
-            // Silent — already saved locally, will retry on next startup
             Log.e("ExpensesVM", "Server sync failed (will retry on restart): ${e.message}")
         }
     }
@@ -322,26 +318,37 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
         advance: Double
     ): String? {
         val textType = "text/plain".toMediaType()
-        val jsonType = "application/json".toMediaType()
+        val jsonType  = "application/json".toMediaType()
 
         val expensesJson = gson.toJson(items.map {
             TripExpenseItemRequest(
                 expenseType = it.expenseType,
-                details = it.details,
-                travelFrom = it.travelFrom,
-                travelTo = it.travelTo,
-                travelMode = it.travelMode,
-                daysCount = it.daysCount,
-                ratePerDay = it.ratePerDay,
-                amount = it.amount
+                details     = it.details,
+                travelFrom  = it.travelFrom,
+                travelTo    = it.travelTo,
+                travelMode  = it.travelMode,
+                daysCount   = it.daysCount,
+                ratePerDay  = it.ratePerDay,
+                amount      = it.amount
             )
         })
 
-        // FIX: Build a List<MultipartBody.Part> instead of Map<String, MultipartBody.Part>.
-        // Each Part carries its own field name ("receipt_0", "receipt_1", …) which the
-        // backend parses with: file.fieldname.match(/receipt_(\d+)/)
-        // Index is based on position in `items`, not on items that have receipts, so the
-        // index in the field name always matches the expense array index on the server.
+        // Build receipt parts.
+        //
+        // HOW THE INDEX ENCODING WORKS (prevents cross-user / sparse-receipt mixups):
+        //
+        // Problem: if a trip has 3 expenses and only expense #2 has a receipt, a naive
+        // sequential approach would assign the file to expense #1 on the server.
+        // With concurrent multi-user requests each request is independent on the server,
+        // but within one request we still need to know WHICH expense each file belongs to.
+        //
+        // Solution: encode the expense array index into the filename as a prefix:
+        //   "expIdx_{index}_{timestamp}.jpg"
+        //   e.g. "expIdx_1_1709040123456.jpg"  ← belongs to expense[1]
+        //
+        // The server reads the expIdx_ prefix from originalname to map each file to
+        // the correct expense slot, regardless of how many expenses lack receipts.
+        // The field name stays "receipts" to satisfy Multer's .array('receipts', 10).
         val receiptParts = mutableListOf<MultipartBody.Part>()
         items.forEachIndexed { index, item ->
             item.receiptImagePath?.let { path ->
@@ -349,9 +356,9 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
                 if (file.exists()) {
                     receiptParts.add(
                         MultipartBody.Part.createFormData(
-                            name = "receipt_$index",                         // matches backend regex
-                            filename = "receipt_${index}_${System.currentTimeMillis()}.jpg",
-                            body = file.asRequestBody("image/jpeg".toMediaType())
+                            name     = "receipts",                                    // Multer field name
+                            filename = "expIdx_${index}_${System.currentTimeMillis()}.jpg", // index encoded
+                            body     = file.asRequestBody("image/jpeg".toMediaType())
                         )
                     )
                 }
@@ -360,11 +367,11 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
 
         val response = RetrofitClient.tripApi.submitTripWithReceipts(
             stationVisited = form.stationVisited.toRequestBody(textType),
-            periodFrom    = form.periodFrom.toRequestBody(textType),
-            periodTo      = form.periodTo.toRequestBody(textType),
-            advanceAmount = advance.toString().toRequestBody(textType),
-            expenses      = expensesJson.toRequestBody(jsonType),
-            receipts      = receiptParts   // ✅ List<MultipartBody.Part>
+            periodFrom     = form.periodFrom.toRequestBody(textType),
+            periodTo       = form.periodTo.toRequestBody(textType),
+            advanceAmount  = advance.toString().toRequestBody(textType),
+            expenses       = expensesJson.toRequestBody(jsonType),
+            receipts       = receiptParts
         )
 
         return if (response.isSuccessful && response.body()?.success == true)
@@ -391,9 +398,9 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
                     val first = items.first()
                     val mockForm = TripForm(
                         stationVisited = first.stationVisited,
-                        periodFrom = first.periodFrom,
-                        periodTo = first.periodTo,
-                        advanceAmount = first.advanceAmount.toString()
+                        periodFrom     = first.periodFrom,
+                        periodTo       = first.periodTo,
+                        advanceAmount  = first.advanceAmount.toString()
                     )
                     submitTripToServer(tripId, mockForm, items)
                 }
