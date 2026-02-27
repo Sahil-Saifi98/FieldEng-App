@@ -123,7 +123,7 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
                     }
                     .sortedByDescending { it.items.first().timestamp }
 
-                // FIX: Pending card shows payable amount only (advance already paid)
+                // Pending card shows payable amount only (advance already paid)
                 // e.g. total=5000, advance=2000 → pending shows 3000, not 5000
                 val totalPending = groups
                     .filter { it.status == "pending" }
@@ -200,9 +200,8 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
             return
         }
 
-        for ((index, item) in f.items.withIndex()) {
-            val a = item.amount.toDoubleOrNull()
-            if (a == null || a <= 0) {
+        f.items.forEachIndexed { index, item ->
+            if ((item.amount.toDoubleOrNull() ?: 0.0) <= 0.0) {
                 _uiState.update { it.copy(errorMessage = "Item ${index + 1}: Enter a valid amount") }
                 return
             }
@@ -338,17 +337,22 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
             )
         })
 
-        // Build receipt parts — folder is fieldapp/receipts in Cloudinary
-        // (separate from selfies which use fieldapp/selfies)
-        val receiptParts = mutableMapOf<String, MultipartBody.Part>()
+        // FIX: Build a List<MultipartBody.Part> instead of Map<String, MultipartBody.Part>.
+        // Each Part carries its own field name ("receipt_0", "receipt_1", …) which the
+        // backend parses with: file.fieldname.match(/receipt_(\d+)/)
+        // Index is based on position in `items`, not on items that have receipts, so the
+        // index in the field name always matches the expense array index on the server.
+        val receiptParts = mutableListOf<MultipartBody.Part>()
         items.forEachIndexed { index, item ->
             item.receiptImagePath?.let { path ->
                 val file = File(path)
                 if (file.exists()) {
-                    receiptParts["receipt_$index"] = MultipartBody.Part.createFormData(
-                        "receipt_$index",
-                        "receipt_${index}_${System.currentTimeMillis()}.jpg",
-                        file.asRequestBody("image/jpeg".toMediaType())
+                    receiptParts.add(
+                        MultipartBody.Part.createFormData(
+                            name = "receipt_$index",                         // matches backend regex
+                            filename = "receipt_${index}_${System.currentTimeMillis()}.jpg",
+                            body = file.asRequestBody("image/jpeg".toMediaType())
+                        )
                     )
                 }
             }
@@ -356,11 +360,11 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
 
         val response = RetrofitClient.tripApi.submitTripWithReceipts(
             stationVisited = form.stationVisited.toRequestBody(textType),
-            periodFrom = form.periodFrom.toRequestBody(textType),
-            periodTo = form.periodTo.toRequestBody(textType),
+            periodFrom    = form.periodFrom.toRequestBody(textType),
+            periodTo      = form.periodTo.toRequestBody(textType),
             advanceAmount = advance.toString().toRequestBody(textType),
-            expenses = expensesJson.toRequestBody(jsonType),
-            receipts = receiptParts
+            expenses      = expensesJson.toRequestBody(jsonType),
+            receipts      = receiptParts   // ✅ List<MultipartBody.Part>
         )
 
         return if (response.isSuccessful && response.body()?.success == true)

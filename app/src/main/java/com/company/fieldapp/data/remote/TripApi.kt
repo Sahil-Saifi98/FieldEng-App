@@ -91,7 +91,10 @@ interface TripApi {
     ): Response<TripResponse>
 
     // Multipart submit (with receipt images)
-    // receipts map keys: "receipt_0", "receipt_1", etc.
+    // FIX: @PartMap cannot hold MultipartBody.Part values.
+    // Use @Part List<MultipartBody.Part> instead — each Part already carries
+    // its own field name (set via MultipartBody.Part.createFormData) so Retrofit
+    // will forward them correctly as receipt_0, receipt_1, etc.
     @Multipart
     @POST("trips/submit")
     suspend fun submitTripWithReceipts(
@@ -100,7 +103,7 @@ interface TripApi {
         @Part("periodTo") periodTo: RequestBody,
         @Part("advanceAmount") advanceAmount: RequestBody,
         @Part("expenses") expenses: RequestBody,
-        @PartMap receipts: Map<String, @JvmSuppressWildcards MultipartBody.Part>
+        @Part receipts: List<MultipartBody.Part>   // ✅ was: @PartMap Map<String, MultipartBody.Part>
     ): Response<TripResponse>
 
     @GET("trips")
