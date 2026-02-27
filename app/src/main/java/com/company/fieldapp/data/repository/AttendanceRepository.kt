@@ -30,6 +30,11 @@ class AttendanceRepository(
         return dao.getTodayAttendance(userId)
     }
 
+    // Add to AttendanceRepository if not already there:
+    suspend fun getUnsyncedAttendance(userId: String): List<AttendanceEntity> {
+        return dao.getUnsyncedAttendance(userId)
+    }
+
     suspend fun markAsSynced(id: Long) {
         dao.markAsSynced(id)
     }

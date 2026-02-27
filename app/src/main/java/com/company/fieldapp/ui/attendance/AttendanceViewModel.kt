@@ -37,6 +37,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         val dao = AppDatabase.getDatabase(application).attendanceDao()
         repository = AttendanceRepository(dao, application)
         loadTodayAttendance()
+        syncUnsyncedOnStartup()
     }
 
     fun onSelfieCaptured(file: File) {
@@ -181,6 +182,81 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             } catch (e: Exception) {
                 _status.value = "Sync error: ${e.message}"
                 Log.e("AttendanceVM", "Sync exception: ${e.message}", e)
+            }
+        }
+    }
+
+    // Auto-runs on init — silently syncs any pending records from previous sessions
+    private fun syncUnsyncedOnStartup() {
+        viewModelScope.launch {
+            try {
+                val userId = sessionManager.getUserId() ?: return@launch
+                val unsynced = repository.getUnsyncedAttendance(userId)
+
+                if (unsynced.isEmpty()) {
+                    Log.d("AttendanceVM", "No unsynced records to sync")
+                    return@launch
+                }
+
+                Log.d("AttendanceVM", "Found ${unsynced.size} unsynced records, syncing...")
+                _status.value = "Syncing ${unsynced.size} pending record(s)..."
+
+                var successCount = 0
+                var failCount = 0
+
+                for (record in unsynced) {
+                    try {
+                        val selfieFile = File(record.selfiePath)
+                        if (!selfieFile.exists()) {
+                            Log.w("AttendanceVM", "Selfie file missing for record ${record.id}, skipping")
+                            failCount++
+                            continue
+                        }
+
+                        val selfiePart = MultipartBody.Part.createFormData(
+                            "selfie",
+                            "selfie_${record.timestamp}.jpg",
+                            selfieFile.asRequestBody("image/jpeg".toMediaType())
+                        )
+
+                        val response = RetrofitClient.attendanceApi.submitAttendance(
+                            selfie = selfiePart,
+                            latitude = record.latitude.toString().toRequestBody("text/plain".toMediaType()),
+                            longitude = record.longitude.toString().toRequestBody("text/plain".toMediaType()),
+                            timestamp = record.timestamp.toString().toRequestBody("text/plain".toMediaType())
+                        )
+
+                        if (response.isSuccessful && response.body()?.success == true) {
+                            val serverData = response.body()!!.data
+                            val updated = record.copy(
+                                address = serverData?.address ?: record.address,
+                                isSynced = true
+                            )
+                            repository.updateAttendance(updated)
+                            successCount++
+                            Log.d("AttendanceVM", "Synced record ${record.id}")
+                        } else {
+                            failCount++
+                            Log.w("AttendanceVM", "Failed to sync record ${record.id}: ${response.body()?.message}")
+                        }
+                    } catch (e: Exception) {
+                        failCount++
+                        Log.e("AttendanceVM", "Error syncing record ${record.id}: ${e.message}")
+                    }
+                }
+
+                // Update status and reload
+                _status.value = when {
+                    failCount == 0 -> "✅ Synced $successCount pending record(s)"
+                    successCount == 0 -> "Ready to check in"
+                    else -> "✅ Synced $successCount, $failCount failed"
+                }
+
+                loadTodayAttendance()
+
+            } catch (e: Exception) {
+                // Silent fail — don't show error to user on startup
+                Log.e("AttendanceVM", "Startup sync error: ${e.message}")
             }
         }
     }
