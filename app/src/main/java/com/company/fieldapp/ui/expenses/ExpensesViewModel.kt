@@ -122,6 +122,7 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
                     }
                     .sortedByDescending { it.items.first().timestamp }
 
+                // Pending shows payable amount only (total - advance already paid)
                 val totalPending = groups
                     .filter { it.status == "pending" }
                     .sumOf { trip ->
@@ -318,37 +319,27 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
         advance: Double
     ): String? {
         val textType = "text/plain".toMediaType()
-        val jsonType  = "application/json".toMediaType()
+        val jsonType = "application/json".toMediaType()
 
         val expensesJson = gson.toJson(items.map {
             TripExpenseItemRequest(
                 expenseType = it.expenseType,
-                details     = it.details,
-                travelFrom  = it.travelFrom,
-                travelTo    = it.travelTo,
-                travelMode  = it.travelMode,
-                daysCount   = it.daysCount,
-                ratePerDay  = it.ratePerDay,
-                amount      = it.amount
+                details = it.details,
+                travelFrom = it.travelFrom,
+                travelTo = it.travelTo,
+                travelMode = it.travelMode,
+                daysCount = it.daysCount,
+                ratePerDay = it.ratePerDay,
+                amount = it.amount
             )
         })
 
-        // Build receipt parts.
-        //
-        // HOW THE INDEX ENCODING WORKS (prevents cross-user / sparse-receipt mixups):
-        //
-        // Problem: if a trip has 3 expenses and only expense #2 has a receipt, a naive
-        // sequential approach would assign the file to expense #1 on the server.
-        // With concurrent multi-user requests each request is independent on the server,
-        // but within one request we still need to know WHICH expense each file belongs to.
-        //
-        // Solution: encode the expense array index into the filename as a prefix:
-        //   "expIdx_{index}_{timestamp}.jpg"
-        //   e.g. "expIdx_1_1709040123456.jpg"  ← belongs to expense[1]
-        //
-        // The server reads the expIdx_ prefix from originalname to map each file to
-        // the correct expense slot, regardless of how many expenses lack receipts.
-        // The field name stays "receipts" to satisfy Multer's .array('receipts', 10).
+        // All receipt parts use field name "receipts" to satisfy Multer's
+        // uploadExpense.array('receipts', 10).
+        // The expense array index is encoded in the filename as "expIdx_{n}_{timestamp}.jpg"
+        // so the server can map each file to the correct expense slot even when
+        // not every expense has a receipt (sparse case). Safe for concurrent
+        // multi-user submissions because each request is fully isolated on the server.
         val receiptParts = mutableListOf<MultipartBody.Part>()
         items.forEachIndexed { index, item ->
             item.receiptImagePath?.let { path ->
@@ -356,8 +347,8 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
                 if (file.exists()) {
                     receiptParts.add(
                         MultipartBody.Part.createFormData(
-                            name     = "receipts",                                    // Multer field name
-                            filename = "expIdx_${index}_${System.currentTimeMillis()}.jpg", // index encoded
+                            name     = "receipts",
+                            filename = "expIdx_${index}_${System.currentTimeMillis()}.jpg",
                             body     = file.asRequestBody("image/jpeg".toMediaType())
                         )
                     )

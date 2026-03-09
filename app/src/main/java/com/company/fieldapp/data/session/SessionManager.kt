@@ -11,6 +11,15 @@ class SessionManager(context: Context) {
         Context.MODE_PRIVATE
     )
 
+    init {
+        // Always restore token immediately on construction so RetrofitClient
+        // is ready before any ViewModel makes its first API call
+        val token = prefs.getString(KEY_TOKEN, null)
+        if (token != null) {
+            RetrofitClient.setAuthToken(token)
+        }
+    }
+
     companion object {
         private const val PREF_NAME = "FieldAppSession"
         private const val KEY_IS_LOGGED_IN = "isLoggedIn"
@@ -52,13 +61,7 @@ class SessionManager(context: Context) {
     }
 
     fun isLoggedIn(): Boolean {
-        val isLoggedIn = prefs.getBoolean(KEY_IS_LOGGED_IN, false)
-        if (isLoggedIn) {
-            // Set token in Retrofit client when app starts
-            val token = getToken()
-            RetrofitClient.setAuthToken(token)
-        }
-        return isLoggedIn
+        return prefs.getBoolean(KEY_IS_LOGGED_IN, false)
     }
 
     fun getToken(): String? {

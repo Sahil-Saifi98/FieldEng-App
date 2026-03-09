@@ -10,5 +10,7 @@ sealed class NavRoutes(val route: String) {
     // Admin routes
     object AdminDashboard : NavRoutes("admin_dashboard")
     object AdminAttendance : NavRoutes("admin_attendance")
+
+    object AdminExpenses : NavRoutes("admin_expenses")
     object AdminExport : NavRoutes("admin_export")
 }

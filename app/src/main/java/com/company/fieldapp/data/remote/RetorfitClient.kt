@@ -31,6 +31,7 @@ object RetrofitClient {
         }
     }
 
+    @Volatile
     private var authToken: String? = null
 
     fun setAuthToken(token: String?) {

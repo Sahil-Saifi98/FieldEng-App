@@ -45,6 +45,7 @@ data class TripData(
     val userId: String,
     val employeeId: String,
     val employeeName: String,
+    val designation: String?,
     val stationVisited: String,
     val periodFrom: String,
     val periodTo: String,
@@ -65,8 +66,9 @@ data class TripResponse(
 
 data class TripListResponse(
     val success: Boolean,
-    val count: Int,
-    val data: List<TripData>
+    val message: String = "",
+    val count: Int = 0,
+    val data: List<TripData> = emptyList()
 )
 
 data class TripStatsData(
@@ -84,18 +86,10 @@ data class TripStatsResponse(
 
 interface TripApi {
 
-    // JSON-only submit (no receipts)
+    // Employee routes
     @POST("trips/submit")
-    suspend fun submitTrip(
-        @Body request: TripSubmitRequest
-    ): Response<TripResponse>
+    suspend fun submitTrip(@Body request: TripSubmitRequest): Response<TripResponse>
 
-    // Multipart submit (with receipt images).
-    // All receipt files use field name "receipts" to satisfy Multer's
-    // uploadExpense.array('receipts', 10). The expense array index is
-    // encoded in each file's filename as "expIdx_{n}_{timestamp}.jpg"
-    // so the server can map receipts to the correct expense slot even
-    // when not every expense has a receipt attached.
     @Multipart
     @POST("trips/submit")
     suspend fun submitTripWithReceipts(
@@ -115,4 +109,19 @@ interface TripApi {
 
     @GET("trips/{id}")
     suspend fun getTrip(@Path("id") id: String): Response<TripResponse>
+
+    // Admin routes
+    @GET("trips/admin/all")
+    suspend fun getAdminAllTrips(
+        @Query("status")     status: String? = null,
+        @Query("employeeId") employeeId: String? = null,
+        @Query("page")       page: Int = 1,
+        @Query("limit")      limit: Int = 100
+    ): Response<TripListResponse>
+
+    @PUT("trips/admin/{id}/status")
+    suspend fun updateTripStatus(
+        @Path("id") tripId: String,
+        @Body body: Map<String, String>
+    ): Response<TripResponse>
 }

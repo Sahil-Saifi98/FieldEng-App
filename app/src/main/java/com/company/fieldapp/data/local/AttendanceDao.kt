@@ -12,13 +12,23 @@ interface AttendanceDao {
     suspend fun insert(attendance: AttendanceEntity): Long
 
     @Update
-    suspend fun update(attendance: AttendanceEntity) // ✅ Added update function
+    suspend fun update(attendance: AttendanceEntity)
 
-    @Query("SELECT * FROM attendance WHERE isSynced = 0 AND userId = :userId")
+    // All unsynced for this user — any date (today + yesterday + older)
+    // ORDER BY timestamp ASC so oldest records are retried first
+    @Query("SELECT * FROM attendance WHERE isSynced = 0 AND userId = :userId ORDER BY timestamp ASC")
     suspend fun getUnsyncedAttendance(userId: String): List<AttendanceEntity>
+
+    // Quick count check without loading full rows
+    @Query("SELECT COUNT(*) FROM attendance WHERE isSynced = 0 AND userId = :userId")
+    suspend fun getUnsyncedCount(userId: String): Int
 
     @Query("UPDATE attendance SET isSynced = 1 WHERE id = :id")
     suspend fun markAsSynced(id: Long)
+
+    // Update address + synced flag atomically — avoids stale data from copy()
+    @Query("UPDATE attendance SET isSynced = 1, address = :address WHERE id = :id")
+    suspend fun markSyncedWithAddress(id: Long, address: String)
 
     @Query("SELECT * FROM attendance WHERE userId = :userId AND DATE(timestamp/1000, 'unixepoch') = DATE('now') ORDER BY timestamp DESC")
     suspend fun getTodayAttendance(userId: String): List<AttendanceEntity>

@@ -35,6 +35,7 @@ fun AttendanceScreen(
     val context = LocalContext.current
     val status by viewModel.status.collectAsState()
     val todayAttendance by viewModel.todayAttendance.collectAsState()
+    val pendingCount by viewModel.pendingCount.collectAsState()
     var showCamera by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
@@ -346,18 +347,31 @@ fun AttendanceScreen(
 
                 Spacer(Modifier.height(16.dp))
 
-                // Sync button
-                Button(
-                    onClick = { viewModel.syncAttendanceToServer() },
+                // Sync button — shows badge when records are pending
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp)
-                        .height(48.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color(0xFF2196F3)
-                    )
                 ) {
-                    Text("Sync Attendance to Server")
+                    Button(
+                        onClick = { viewModel.syncAttendanceToServer() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (pendingCount > 0) Color(0xFFFF6B35) else Color(0xFF2196F3)
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (pendingCount > 0) "Sync Now ($pendingCount pending)" else "Sync Attendance"
+                        )
+                    }
                 }
 
                 // Extra spacing at bottom to ensure last button is visible

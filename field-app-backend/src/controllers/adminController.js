@@ -1,6 +1,14 @@
 const Attendance = require('../models/Attendance');
 const User = require('../models/User');
-const moment = require('moment');
+const moment = require('moment-timezone');
+const IST = 'Asia/Kolkata';
+
+// Convert any timestamp to IST — used for all exports so times are always IST
+const toISTTime = (ts) => moment(ts).tz('Asia/Kolkata').format('HH:mm:ss');
+const toISTDate = (ts) => moment(ts).tz('Asia/Kolkata').format('YYYY-MM-DD');
+// Always recompute from raw timestamp so even old stored-UTC records export correctly
+const getISTTime = (att) => att.timestamp ? toISTTime(att.timestamp) : (att.checkInTime || '');
+const getISTDate = (att) => att.timestamp ? toISTDate(att.timestamp) : (att.date || '');
 const archiver = require('archiver');
 const PDFDocument = require('pdfkit');
 const axios = require('axios');
@@ -293,11 +301,11 @@ exports.exportUserData = async (req, res) => {
     let downloadedCount = 0;
     for (let i = 0; i < Math.min(attendance.length, 100); i++) { // Limit to first 100
       const att = attendance[i];
-      const filename = `selfie_${att.date}_${att.checkInTime.replace(/:/g, '-')}.jpg`;
+      const filename = `selfie_${getISTDate(att)}_${getISTTime(att).replace(/:/g, '-')}.jpg`;
       const filepath = path.join(selfiesDirectory, filename);
 
       // ✅ Added address field to CSV
-      csvContent += `"${att.date}","${att.checkInTime}",${att.latitude},${att.longitude},"${att.address || 'Address unavailable'}","selfies/${filename}"\n`;
+      csvContent += `"${getISTDate(att)}","${getISTTime(att)}",${att.latitude},${att.longitude},"${att.address || 'Address unavailable'}","selfies/${filename}"\n`;
 
       // Download images for better data
       if (att.selfiePath) {
@@ -316,9 +324,9 @@ exports.exportUserData = async (req, res) => {
     // Add remaining records to CSV without downloading images
     for (let i = 100; i < attendance.length; i++) {
       const att = attendance[i];
-      const filename = `selfie_${att.date}_${att.checkInTime.replace(/:/g, '-')}.jpg`;
+      const filename = `selfie_${getISTDate(att)}_${getISTTime(att).replace(/:/g, '-')}.jpg`;
       // ✅ Added address field to CSV
-      csvContent += `"${att.date}","${att.checkInTime}",${att.latitude},${att.longitude},"${att.address || 'Address unavailable'}","${att.selfiePath}"\n`;
+      csvContent += `"${getISTDate(att)}","${getISTTime(att)}",${att.latitude},${att.longitude},"${att.address || 'Address unavailable'}","${att.selfiePath}"\n`;
     }
 
     console.log(`Downloaded ${downloadedCount} selfie images`);
@@ -545,8 +553,8 @@ exports.exportAllData = async (req, res) => {
       csvContent += `"${att.userId ? att.userId.name : 'Unknown'}",`;
       csvContent += `"${att.userId ? att.userId.department : ''}",`;
       csvContent += `"${att.userId ? att.userId.designation : ''}",`;
-      csvContent += `"${att.date}",`;
-      csvContent += `"${att.checkInTime}",`;
+      csvContent += `"${getISTDate(att)}",`;
+      csvContent += `"${getISTTime(att)}",`;
       csvContent += `${att.latitude},`;
       csvContent += `${att.longitude},`;
       csvContent += `"${att.address || 'Address unavailable'}",`; // ✅ Added address field
@@ -694,8 +702,8 @@ exports.exportAttendanceCSV = async (req, res) => {
       csv += `"${att.userId ? att.userId.name : 'Unknown'}",`;
       csv += `"${att.userId ? att.userId.department : ''}",`;
       csv += `"${att.userId ? att.userId.designation : ''}",`;
-      csv += `"${att.date}",`;
-      csv += `"${att.checkInTime}",`;
+      csv += `"${getISTDate(att)}",`;
+      csv += `"${getISTTime(att)}",`;
       csv += `${att.latitude},`;
       csv += `${att.longitude},`;
       csv += `"${att.address || 'Address unavailable'}",`; // ✅ Added address field
@@ -797,8 +805,8 @@ exports.exportAttendancePDF = async (req, res) => {
       doc.fontSize(7);
       doc.text(att.employeeId || '', 30, currentY, { width: 50 });
       doc.text(att.userId ? att.userId.name : 'Unknown', 85, currentY, { width: 80 });
-      doc.text(att.date, 170, currentY, { width: 60 });
-      doc.text(att.checkInTime, 235, currentY, { width: 45 });
+      doc.text(getISTDate(att), 170, currentY, { width: 60 });
+      doc.text(getISTTime(att), 235, currentY, { width: 45 });
       doc.text(`${att.latitude.toFixed(4)}, ${att.longitude.toFixed(4)}`, 285, currentY, { width: 80 });
       // ✅ Added address with word wrapping
       doc.text(att.address || 'Address unavailable', 370, currentY, { 
@@ -858,8 +866,8 @@ exports.exportAttendanceJSON = async (req, res) => {
         employeeName: att.userId ? att.userId.name : 'Unknown',
         department: att.userId ? att.userId.department : '',
         designation: att.userId ? att.userId.designation : '',
-        date: att.date,
-        checkInTime: att.checkInTime,
+        date: getISTDate(att),
+        checkInTime: getISTTime(att),
         latitude: att.latitude,
         longitude: att.longitude,
         address: att.address || 'Address unavailable', // ✅ Added address field

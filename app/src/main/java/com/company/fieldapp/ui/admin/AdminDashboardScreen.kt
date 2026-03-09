@@ -118,7 +118,7 @@ fun AdminDashboardScreen(navController: NavHostController) {
                     icon = Icons.Default.Receipt,
                     color = Color(0xFF2196F3),
                     modifier = Modifier.weight(1f),
-                    onClick = { /* Navigate to expenses */ }
+                    onClick = { navController.navigate(NavRoutes.AdminExpenses.route) }  // ← WIRED
                 )
             }
 
@@ -147,7 +147,6 @@ fun AdminDashboardScreen(navController: NavHostController) {
 
             Spacer(Modifier.height(24.dp))
 
-            // Recent Activity Section
             Text(
                 text = "Recent Activity",
                 style = MaterialTheme.typography.titleLarge,

@@ -1,5 +1,6 @@
 const Attendance = require('../models/Attendance');
-const moment = require('moment');
+const moment = require('moment-timezone');
+const IST = 'Asia/Kolkata';
 const { syncToSecondary } = require('../config/dbSync');
 const { getAddressFromCoordinates } = require('../utils/geocoder');
 const { cloudinary } = require('../config/cloudinary');
@@ -102,8 +103,8 @@ exports.submitAttendance = async (req, res) => {
     }
 
     const timestampDate = new Date(parseInt(timestamp));
-    const date = moment(timestampDate).format('YYYY-MM-DD');
-    const checkInTime = moment(timestampDate).format('HH:mm:ss');
+    const date = moment(timestampDate).tz(IST).format('YYYY-MM-DD');
+    const checkInTime = moment(timestampDate).tz(IST).format('HH:mm:ss');
 
     const attendance = await Attendance.create({
       userId: req.user._id,

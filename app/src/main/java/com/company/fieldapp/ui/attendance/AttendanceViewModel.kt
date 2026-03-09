@@ -12,6 +12,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -27,6 +28,10 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private val _todayAttendance = MutableStateFlow<List<AttendanceEntity>>(emptyList())
     val todayAttendance: StateFlow<List<AttendanceEntity>> = _todayAttendance
 
+    // How many records are still pending — shown as a badge in the UI if > 0
+    private val _pendingCount = MutableStateFlow(0)
+    val pendingCount: StateFlow<Int> = _pendingCount
+
     private var capturedSelfiePath: String? = null
     private var capturedLatitude: Double? = null
     private var capturedLongitude: Double? = null
@@ -37,7 +42,9 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         val dao = AppDatabase.getDatabase(application).attendanceDao()
         repository = AttendanceRepository(dao, application)
         loadTodayAttendance()
-        syncUnsyncedOnStartup()
+        // Delay startup sync slightly to allow SessionManager to fully restore token
+        // before any network calls fire (avoids 401 race on cold start)
+        syncUnsyncedOnStartup(delayMs = 600)
     }
 
     fun onSelfieCaptured(file: File) {
@@ -50,8 +57,6 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         capturedLatitude = lat
         capturedLongitude = lng
         Log.d("AttendanceVM", "Location received: $lat, $lng")
-
-        // Save attendance both locally and to backend
         saveAttendance()
     }
 
@@ -70,192 +75,163 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         val lat = capturedLatitude
         val lng = capturedLongitude
 
-        if (selfiePath != null && lat != null && lng != null) {
-            viewModelScope.launch {
-                try {
-                    val timestamp = System.currentTimeMillis()
-
-                    // Get current user info
-                    val userId = sessionManager.getUserId() ?: ""
-                    val employeeId = sessionManager.getEmployeeId() ?: ""
-
-                    // Save to local database first with temporary address
-                    val attendance = AttendanceEntity(
-                        userId = userId,
-                        employeeId = employeeId,
-                        selfiePath = selfiePath,
-                        latitude = lat,
-                        longitude = lng,
-                        address = "Location: $lat, $lng", // ✅ Temporary address placeholder
-                        timestamp = timestamp,
-                        isSynced = false
-                    )
-                    val localId = repository.saveAttendance(attendance)
-                    Log.d("AttendanceVM", "Saved to local DB with ID: $localId")
-
-                    // Send to backend immediately
-                    _status.value = "Uploading to server..."
-
-                    val selfieFile = File(selfiePath)
-                    if (selfieFile.exists()) {
-                        Log.d("AttendanceVM", "File exists: ${selfieFile.length()} bytes")
-
-                        // Create multipart with proper MIME type
-                        val selfiePart = MultipartBody.Part.createFormData(
-                            "selfie",
-                            "selfie_${timestamp}.jpg",
-                            selfieFile.asRequestBody("image/jpeg".toMediaType())
-                        )
-
-                        Log.d("AttendanceVM", "Uploading: lat=$lat, lng=$lng, timestamp=$timestamp")
-
-                        val response = RetrofitClient.attendanceApi.submitAttendance(
-                            selfie = selfiePart,
-                            latitude = lat.toString().toRequestBody("text/plain".toMediaType()),
-                            longitude = lng.toString().toRequestBody("text/plain".toMediaType()),
-                            timestamp = timestamp.toString().toRequestBody("text/plain".toMediaType())
-                        )
-
-                        if (response.isSuccessful && response.body()?.success == true) {
-                            val serverData = response.body()!!.data
-
-                            // ✅ Update local record with server's address
-                            if (serverData != null) {
-                                val updatedAttendance = attendance.copy(
-                                    id = localId,
-                                    address = serverData.address, // ✅ Update with actual address from server
-                                    isSynced = true
-                                )
-                                repository.updateAttendance(updatedAttendance)
-                                Log.d("AttendanceVM", "Updated local record with address: ${serverData.address}")
-                            } else {
-                                // Just mark as synced
-                                repository.markAsSynced(localId)
-                            }
-
-                            _status.value = "✅ Attendance recorded successfully!"
-                            Log.d("AttendanceVM", "Upload successful!")
-                        } else {
-                            val errorMsg = response.body()?.message ?: response.message()
-                            _status.value = "⚠️ Server error: $errorMsg"
-                            Log.e("AttendanceVM", "Upload failed: $errorMsg")
-                        }
-                    } else {
-                        _status.value = "⚠️ File not found"
-                        Log.e("AttendanceVM", "Selfie file not found")
-                    }
-
-                    // Reset
-                    capturedSelfiePath = null
-                    capturedLatitude = null
-                    capturedLongitude = null
-
-                    // Reload today's attendance
-                    loadTodayAttendance()
-
-                } catch (e: Exception) {
-                    _status.value = "Error: ${e.message}"
-                    Log.e("AttendanceVM", "Exception: ${e.message}", e)
-                }
-            }
-        } else {
+        if (selfiePath == null || lat == null || lng == null) {
             _status.value = "Missing data for attendance"
-            Log.e("AttendanceVM", "Missing data: selfie=$selfiePath, lat=$lat, lng=$lng")
+            Log.e("AttendanceVM", "Missing: selfie=$selfiePath lat=$lat lng=$lng")
+            return
         }
-    }
 
-    fun syncAttendanceToServer() {
+        // Reset immediately so a second trigger can't reuse stale data
+        capturedSelfiePath = null
+        capturedLatitude = null
+        capturedLongitude = null
+
         viewModelScope.launch {
+            var localId = -1L
             try {
-                _status.value = "Syncing..."
-                val result = repository.syncAttendanceToServer()
+                val timestamp = System.currentTimeMillis()
+                val userId = sessionManager.getUserId() ?: ""
+                val employeeId = sessionManager.getEmployeeId() ?: ""
 
-                result.onSuccess { message ->
-                    _status.value = message
+                // Always save locally first — attendance is never lost even if network fails
+                val attendance = AttendanceEntity(
+                    userId = userId,
+                    employeeId = employeeId,
+                    selfiePath = selfiePath,
+                    latitude = lat,
+                    longitude = lng,
+                    address = "Location: $lat, $lng",
+                    timestamp = timestamp,
+                    isSynced = false
+                )
+                localId = repository.saveAttendance(attendance)
+                Log.d("AttendanceVM", "Saved locally — id=$localId")
+
+                // Now attempt to upload
+                _status.value = "Uploading to server..."
+
+                val selfieFile = File(selfiePath)
+                if (!selfieFile.exists()) {
+                    // File was already moved/deleted — keep as pending for manual sync
+                    _status.value = "⚠️ Selfie file missing — saved locally, tap Sync to retry"
+                    Log.e("AttendanceVM", "File not found: $selfiePath")
+                    refreshPendingCount()
                     loadTodayAttendance()
-                }
-
-                result.onFailure { error ->
-                    _status.value = "Sync error: ${error.message}"
-                    Log.e("AttendanceVM", "Sync failed: ${error.message}")
-                }
-            } catch (e: Exception) {
-                _status.value = "Sync error: ${e.message}"
-                Log.e("AttendanceVM", "Sync exception: ${e.message}", e)
-            }
-        }
-    }
-
-    // Auto-runs on init — silently syncs any pending records from previous sessions
-    private fun syncUnsyncedOnStartup() {
-        viewModelScope.launch {
-            try {
-                val userId = sessionManager.getUserId() ?: return@launch
-                val unsynced = repository.getUnsyncedAttendance(userId)
-
-                if (unsynced.isEmpty()) {
-                    Log.d("AttendanceVM", "No unsynced records to sync")
                     return@launch
                 }
 
-                Log.d("AttendanceVM", "Found ${unsynced.size} unsynced records, syncing...")
-                _status.value = "Syncing ${unsynced.size} pending record(s)..."
+                val selfiePart = MultipartBody.Part.createFormData(
+                    "selfie",
+                    "selfie_${timestamp}.jpg",
+                    selfieFile.asRequestBody("image/jpeg".toMediaType())
+                )
 
-                var successCount = 0
-                var failCount = 0
+                val response = RetrofitClient.attendanceApi.submitAttendance(
+                    selfie = selfiePart,
+                    latitude = lat.toString().toRequestBody("text/plain".toMediaType()),
+                    longitude = lng.toString().toRequestBody("text/plain".toMediaType()),
+                    timestamp = timestamp.toString().toRequestBody("text/plain".toMediaType())
+                )
 
-                for (record in unsynced) {
-                    try {
-                        val selfieFile = File(record.selfiePath)
-                        if (!selfieFile.exists()) {
-                            Log.w("AttendanceVM", "Selfie file missing for record ${record.id}, skipping")
-                            failCount++
-                            continue
-                        }
-
-                        val selfiePart = MultipartBody.Part.createFormData(
-                            "selfie",
-                            "selfie_${record.timestamp}.jpg",
-                            selfieFile.asRequestBody("image/jpeg".toMediaType())
-                        )
-
-                        val response = RetrofitClient.attendanceApi.submitAttendance(
-                            selfie = selfiePart,
-                            latitude = record.latitude.toString().toRequestBody("text/plain".toMediaType()),
-                            longitude = record.longitude.toString().toRequestBody("text/plain".toMediaType()),
-                            timestamp = record.timestamp.toString().toRequestBody("text/plain".toMediaType())
-                        )
-
-                        if (response.isSuccessful && response.body()?.success == true) {
-                            val serverData = response.body()!!.data
-                            val updated = record.copy(
-                                address = serverData?.address ?: record.address,
-                                isSynced = true
-                            )
-                            repository.updateAttendance(updated)
-                            successCount++
-                            Log.d("AttendanceVM", "Synced record ${record.id}")
-                        } else {
-                            failCount++
-                            Log.w("AttendanceVM", "Failed to sync record ${record.id}: ${response.body()?.message}")
-                        }
-                    } catch (e: Exception) {
-                        failCount++
-                        Log.e("AttendanceVM", "Error syncing record ${record.id}: ${e.message}")
-                    }
+                if (response.isSuccessful && response.body()?.success == true) {
+                    val serverAddress = response.body()!!.data?.address
+                    val updated = attendance.copy(
+                        id = localId,
+                        address = serverAddress ?: attendance.address,
+                        isSynced = true
+                    )
+                    repository.updateAttendance(updated)
+                    _status.value = "✅ Attendance recorded successfully!"
+                    Log.d("AttendanceVM", "Upload success — address: $serverAddress")
+                } else {
+                    // Server error — record stays pending, sync will retry
+                    val code = response.code()
+                    val msg = response.body()?.message ?: "HTTP $code"
+                    _status.value = "⚠️ Upload failed ($msg) — saved locally, tap Sync to retry"
+                    Log.e("AttendanceVM", "Upload failed: $msg")
                 }
 
-                // Update status and reload
+            } catch (e: Exception) {
+                // Network exception — local record already saved, sync will retry
+                _status.value = if (localId > 0)
+                    "⚠️ Network error — saved locally, tap Sync to retry"
+                else
+                    "⚠️ Error: ${e.message}"
+                Log.e("AttendanceVM", "saveAttendance exception: ${e.message}", e)
+            } finally {
+                refreshPendingCount()
+                loadTodayAttendance()
+            }
+        }
+    }
+
+    /**
+     * Manual sync triggered by the Sync button.
+     * Syncs ALL pending records — today, yesterday, and any older ones.
+     */
+    fun syncAttendanceToServer() {
+        viewModelScope.launch {
+            _status.value = "Syncing..."
+            try {
+                val result = repository.syncAllPendingToServer()
                 _status.value = when {
-                    failCount == 0 -> "✅ Synced $successCount pending record(s)"
-                    successCount == 0 -> "Ready to check in"
-                    else -> "✅ Synced $successCount, $failCount failed"
+                    result.total == 0 -> "✅ All attendance is up to date"
+                    result.success == result.total -> "✅ Synced all ${result.success} record(s)"
+                    result.success > 0 -> "✅ Synced ${result.success} / ${result.total} — ${result.failed} failed"
+                    else -> "⚠️ Sync failed — check connection and try again"
+                }
+            } catch (e: Exception) {
+                _status.value = "Sync error: ${e.message}"
+                Log.e("AttendanceVM", "syncAttendanceToServer exception: ${e.message}", e)
+            } finally {
+                refreshPendingCount()
+                loadTodayAttendance()
+            }
+        }
+    }
+
+    /**
+     * Auto-sync on startup — handles:
+     *  • Records from the current session that failed due to network issues
+     *  • Records from yesterday or older sessions (e.g. app was offline all day)
+     *  • 401 race condition: waits [delayMs] before firing so token is ready
+     */
+    private fun syncUnsyncedOnStartup(delayMs: Long = 600) {
+        viewModelScope.launch {
+            try {
+                delay(delayMs)
+
+                val userId = sessionManager.getUserId() ?: return@launch
+                val count = repository.getUnsyncedCount(userId)
+
+                if (count == 0) {
+                    Log.d("AttendanceVM", "Startup sync: nothing pending")
+                    return@launch
                 }
 
+                Log.d("AttendanceVM", "Startup sync: $count pending record(s) — syncing all dates")
+                _status.value = "Syncing $count pending record(s)..."
+
+                val result = repository.syncAllPendingToServer()
+
+                _status.value = when {
+                    result.success == 0 && result.failed == 0 ->
+                        // All were missing-file entries — queue cleared silently
+                        "Ready to check in"
+                    result.failed == 0 ->
+                        "✅ Synced ${result.success} pending record(s)"
+                    result.success > 0 ->
+                        "⚠️ Synced ${result.success}, ${result.failed} still pending — tap Sync to retry"
+                    else ->
+                        // Nothing synced but don't alarm user on startup — they'll see pending badge
+                        "Ready to check in"
+                }
+
+                refreshPendingCount()
                 loadTodayAttendance()
 
             } catch (e: Exception) {
-                // Silent fail — don't show error to user on startup
+                // Silent fail on startup — pending badge will still show
                 Log.e("AttendanceVM", "Startup sync error: ${e.message}")
             }
         }
@@ -266,10 +242,20 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             try {
                 val attendance = repository.getTodayAttendance()
                 _todayAttendance.value = attendance
-                Log.d("AttendanceVM", "Loaded ${attendance.size} attendance records")
+                Log.d("AttendanceVM", "Loaded ${attendance.size} today's records")
             } catch (e: Exception) {
-                _status.value = "Error loading attendance: ${e.message}"
-                Log.e("AttendanceVM", "Load error: ${e.message}", e)
+                Log.e("AttendanceVM", "loadTodayAttendance error: ${e.message}", e)
+            }
+        }
+    }
+
+    private fun refreshPendingCount() {
+        viewModelScope.launch {
+            try {
+                val userId = sessionManager.getUserId() ?: return@launch
+                _pendingCount.value = repository.getUnsyncedCount(userId)
+            } catch (e: Exception) {
+                Log.e("AttendanceVM", "refreshPendingCount error: ${e.message}")
             }
         }
     }

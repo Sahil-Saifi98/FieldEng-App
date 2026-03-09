@@ -15,6 +15,7 @@ import com.company.fieldapp.ui.profile.ProfileScreen
 import com.company.fieldapp.ui.admin.AdminDashboardScreen
 import com.company.fieldapp.ui.admin.AdminAttendanceScreen
 import com.company.fieldapp.ui.admin.AdminExportScreen
+import com.company.fieldapp.ui.admin.AdminExpenseScreen
 
 @Composable
 fun AppNavGraph() {
@@ -91,5 +92,10 @@ fun AppNavGraph() {
         composable(NavRoutes.AdminExport.route) {
             AdminExportScreen(navController = navController)
         }
+
+        composable(NavRoutes.AdminExpenses.route) {
+            AdminExpenseScreen(navController)
+        }
     }
+
 }
