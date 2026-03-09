@@ -122,8 +122,16 @@ fun ExpensesScreen(
     viewModel: ExpensesViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val form by viewModel.form.collectAsState()
+    val form    by viewModel.form.collectAsState()
     val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(uiState.syncMessage) {
+        uiState.syncMessage?.let {
+            snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Short)
+            viewModel.clearSyncMessage()
+        }
+    }
 
     var pendingCameraItemId by remember { mutableStateOf<String?>(null) }
     var capturePath by remember { mutableStateOf<String?>(null) }
@@ -152,6 +160,7 @@ fun ExpensesScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             NavigationBar(
                 containerColor = MaterialTheme.colorScheme.surface,
@@ -284,6 +293,18 @@ fun ExpensesScreen(
                             onClearReceipt = viewModel::clearReceipt,
                             onSubmit = viewModel::submitTrip,
                             onDismiss = viewModel::hideAddForm
+                        )
+                    }
+                }
+
+                // ── Sync status banner ───────────────────────────
+                if (uiState.unsyncedCount > 0 || uiState.isSyncing) {
+                    item {
+                        SyncBanner(
+                            unsyncedCount = uiState.unsyncedCount,
+                            isSyncing     = uiState.isSyncing,
+                            isOnline      = viewModel.isOnline(),
+                            onRetry       = { viewModel.syncUnsyncedTrips() }
                         )
                     }
                 }
@@ -906,6 +927,87 @@ fun ExpenseItemForm(
 }
 
 // ── Trip card (list item) ─────────────────────────────────────────
+// ── Sync status banner ───────────────────────────────────────────
+@Composable
+fun SyncBanner(
+    unsyncedCount: Int,
+    isSyncing: Boolean,
+    isOnline: Boolean,
+    onRetry: () -> Unit
+) {
+    val bgColor     = if (isSyncing) Color(0xFFE3F2FD) else Color(0xFFFFF8E1)
+    val borderColor = if (isSyncing) Color(0xFF90CAF9) else Color(0xFFFFCC02)
+    val iconColor   = if (isSyncing) Color(0xFF1565C0) else Color(0xFFE65100)
+    val textColor   = if (isSyncing) Color(0xFF1565C0) else Color(0xFFE65100)
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        color = bgColor,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, borderColor)
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (isSyncing) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = Color(0xFF1565C0)
+                )
+            } else {
+                Icon(
+                    Icons.Default.CloudOff, null,
+                    tint = iconColor,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = when {
+                        isSyncing -> "Syncing trips to server..."
+                        !isOnline -> "$unsyncedCount trip(s) saved offline — no internet"
+                        else      -> "$unsyncedCount trip(s) not yet synced"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = textColor
+                )
+                if (!isSyncing) {
+                    Text(
+                        text = if (isOnline) "Tap Retry to upload now"
+                        else "Will sync automatically when connected",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color(0xFF795548)
+                    )
+                }
+            }
+            if (!isSyncing && isOnline) {
+                Spacer(Modifier.width(8.dp))
+                TextButton(
+                    onClick = onRetry,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.textButtonColors(contentColor = Orange)
+                ) {
+                    Icon(Icons.Default.Refresh, null, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "Retry",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun TripCard(
     trip: TripGroup,
@@ -961,6 +1063,32 @@ fun TripCard(
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Bold
                         )
+                        if (!trip.isSynced) {
+                            Spacer(Modifier.width(6.dp))
+                            Surface(
+                                color = Color(0xFFFFF3E0),
+                                shape = RoundedCornerShape(4.dp),
+                                border = BorderStroke(0.5.dp, Color(0xFFE65100))
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.CloudOff, null,
+                                        tint = Color(0xFFE65100),
+                                        modifier = Modifier.size(10.dp)
+                                    )
+                                    Spacer(Modifier.width(3.dp))
+                                    Text(
+                                        "NOT SYNCED",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFFE65100),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
                     }
                     Text(
                         "${trip.periodFrom}  →  ${trip.periodTo}",

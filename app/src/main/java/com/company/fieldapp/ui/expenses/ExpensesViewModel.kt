@@ -1,23 +1,23 @@
 package com.company.fieldapp.ui.expenses
 
 import android.app.Application
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.company.fieldapp.data.local.AppDatabase
 import com.company.fieldapp.data.local.ExpenseEntity
 import com.company.fieldapp.data.remote.RetrofitClient
-import com.company.fieldapp.data.remote.TripExpenseItemRequest
-import com.company.fieldapp.data.remote.TripSubmitRequest
+import com.company.fieldapp.data.repository.ExpenseRepository
 import com.company.fieldapp.data.session.SessionManager
-import com.google.gson.Gson
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.MultipartBody
-import okhttp3.RequestBody.Companion.asRequestBody
-import okhttp3.RequestBody.Companion.toRequestBody
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -74,6 +74,8 @@ data class ExpenseUiState(
     val totalPending: Double = 0.0,
     val totalApproved: Double = 0.0,
     val isLoading: Boolean = false,
+    val isSyncing: Boolean = false,
+    val unsyncedCount: Int = 0,
     val showAddForm: Boolean = false,
     val errorMessage: String? = null,
     val currency: Currency = Currency.INR,
@@ -82,11 +84,11 @@ data class ExpenseUiState(
 
 class ExpensesViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val dao = AppDatabase.getDatabase(application).expenseDao()
+    private val dao        = AppDatabase.getDatabase(application).expenseDao()
+    private val repository = ExpenseRepository(dao)
     private val sessionManager = SessionManager(application)
-    private val userId = sessionManager.getUserId() ?: ""
+    private val userId     = sessionManager.getUserId() ?: ""
     private val employeeId = sessionManager.getEmployeeId() ?: ""
-    private val gson = Gson()
 
     private val _uiState = MutableStateFlow(ExpenseUiState())
     val uiState: StateFlow<ExpenseUiState> = _uiState
@@ -94,10 +96,52 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
     private val _form = MutableStateFlow(TripForm())
     val form: StateFlow<TripForm> = _form
 
+    private var syncJob: Job? = null
+
+    private val connectivityManager =
+        application.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+
+    // Fires syncUnsyncedTrips the moment internet reconnects — mirrors AttendanceViewModel
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            Log.d("ExpensesVM", "Network available — retrying unsynced trips")
+            syncUnsyncedTrips()
+        }
+    }
+
     init {
         loadExpenses()
-        syncUnsyncedTrips()
-        refreshStatusFromServer()
+        // Delay 600ms so SessionManager has fully restored auth token before
+        // any network calls fire — same pattern as AttendanceViewModel
+        viewModelScope.launch {
+            delay(600)
+            refreshUnsyncedCount()
+            syncUnsyncedTrips()
+            refreshStatusFromServer()
+        }
+        registerNetworkCallback()
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        try { connectivityManager.unregisterNetworkCallback(networkCallback) } catch (_: Exception) {}
+    }
+
+    private fun registerNetworkCallback() {
+        try {
+            val req = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            connectivityManager.registerNetworkCallback(req, networkCallback)
+        } catch (e: Exception) {
+            Log.e("ExpensesVM", "Failed to register network callback: ${e.message}")
+        }
+    }
+
+    fun isOnline(): Boolean {
+        val net  = connectivityManager.activeNetwork ?: return false
+        val caps = connectivityManager.getNetworkCapabilities(net) ?: return false
+        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     // ── Load & group from local DB ────────────────────────────────
@@ -108,28 +152,23 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
                     .groupBy { it.tripId }
                     .map { (tripId, items) ->
                         val first = items.first()
-                        val total = items.sumOf { it.amount }
                         TripGroup(
-                            tripId = tripId,
+                            tripId         = tripId,
                             stationVisited = first.stationVisited,
-                            periodFrom = first.periodFrom,
-                            periodTo = first.periodTo,
-                            advanceAmount = first.advanceAmount,
-                            status = first.status,
-                            items = items,
-                            total = total,
-                            isSynced = items.all { it.isSynced }
+                            periodFrom     = first.periodFrom,
+                            periodTo       = first.periodTo,
+                            advanceAmount  = first.advanceAmount,
+                            status         = first.status,
+                            items          = items,
+                            total          = items.sumOf { it.amount },
+                            isSynced       = items.all { it.isSynced }
                         )
                     }
                     .sortedByDescending { it.items.first().timestamp }
 
-                // Pending shows payable amount only (total - advance already paid)
                 val totalPending = groups
                     .filter { it.status == "pending" }
-                    .sumOf { trip ->
-                        val payable = trip.total - trip.advanceAmount
-                        if (payable > 0) payable else 0.0
-                    }
+                    .sumOf { t -> (t.total - t.advanceAmount).coerceAtLeast(0.0) }
 
                 val totalApproved = groups
                     .filter { it.status == "approved" }
@@ -137,8 +176,8 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
 
                 _uiState.update {
                     it.copy(
-                        trips = groups,
-                        totalPending = totalPending,
+                        trips         = groups,
+                        totalPending  = totalPending,
                         totalApproved = totalApproved
                     )
                 }
@@ -164,10 +203,10 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
 
     fun hideAddForm() = _uiState.update { it.copy(showAddForm = false) }
 
-    fun onStationChange(v: String) = _form.update { it.copy(stationVisited = v) }
+    fun onStationChange(v: String)    = _form.update { it.copy(stationVisited = v) }
     fun onPeriodFromChange(v: String) = _form.update { it.copy(periodFrom = v) }
-    fun onPeriodToChange(v: String) = _form.update { it.copy(periodTo = v) }
-    fun onAdvanceChange(v: String) = _form.update { it.copy(advanceAmount = v) }
+    fun onPeriodToChange(v: String)   = _form.update { it.copy(periodTo = v) }
+    fun onAdvanceChange(v: String)    = _form.update { it.copy(advanceAmount = v) }
 
     fun addLineItem() = _form.update { it.copy(items = it.items + ExpenseLineItem()) }
 
@@ -190,7 +229,7 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
         updateLineItem(itemId, item.copy(receiptImagePath = null))
     }
 
-    // ── Submit trip ───────────────────────────────────────────────
+    // ── Submit trip (offline-first) ───────────────────────────────
     fun submitTrip() {
         val f = _form.value
 
@@ -198,7 +237,6 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
             _uiState.update { it.copy(errorMessage = "Please enter the station / place visited") }
             return
         }
-
         f.items.forEachIndexed { index, item ->
             if ((item.amount.toDoubleOrNull() ?: 0.0) <= 0.0) {
                 _uiState.update { it.copy(errorMessage = "Item ${index + 1}: Enter a valid amount") }
@@ -209,42 +247,41 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             try {
-                val tripId = UUID.randomUUID().toString()
+                val tripId  = UUID.randomUUID().toString()
                 val advance = f.advanceAmount.toDoubleOrNull() ?: 0.0
 
-                // 1. Save all items locally first (offline-first)
-                val savedItems = mutableListOf<ExpenseEntity>()
+                // 1. Always save locally first — trip is never lost even if offline
                 f.items.forEach { item ->
-                    val amtInInr = (item.amount.toDoubleOrNull() ?: 0.0).let {
-                        if (_uiState.value.currency == Currency.USD) it * USD_TO_INR else it
+                    val amtInInr = (item.amount.toDoubleOrNull() ?: 0.0).let { amt ->
+                        if (_uiState.value.currency == Currency.USD) amt * USD_TO_INR else amt
                     }
-                    val entity = ExpenseEntity(
-                        userId = userId,
-                        employeeId = employeeId,
-                        tripId = tripId,
-                        stationVisited = f.stationVisited,
-                        periodFrom = f.periodFrom,
-                        periodTo = f.periodTo,
-                        advanceAmount = advance,
-                        expenseType = item.expenseType.label,
-                        details = item.details,
-                        travelFrom = item.travelFrom,
-                        travelTo = item.travelTo,
-                        travelMode = item.travelMode,
-                        daysCount = item.daysCount.toIntOrNull() ?: 0,
-                        ratePerDay = item.ratePerDay.toDoubleOrNull() ?: 0.0,
-                        amount = amtInInr,
-                        receiptImagePath = item.receiptImagePath,
-                        isSynced = false
+                    dao.insert(
+                        ExpenseEntity(
+                            userId           = userId,
+                            employeeId       = employeeId,
+                            tripId           = tripId,
+                            stationVisited   = f.stationVisited,
+                            periodFrom       = f.periodFrom,
+                            periodTo         = f.periodTo,
+                            advanceAmount    = advance,
+                            expenseType      = item.expenseType.label,
+                            details          = item.details,
+                            travelFrom       = item.travelFrom,
+                            travelTo         = item.travelTo,
+                            travelMode       = item.travelMode,
+                            daysCount        = item.daysCount.toIntOrNull() ?: 0,
+                            ratePerDay       = item.ratePerDay.toDoubleOrNull() ?: 0.0,
+                            amount           = amtInInr,
+                            receiptImagePath = item.receiptImagePath,
+                            isSynced         = false
+                        )
                     )
-                    val localId = dao.insert(entity)
-                    savedItems.add(entity.copy(id = localId))
                 }
 
                 _uiState.update { it.copy(showAddForm = false) }
 
-                // 2. Try server immediately
-                submitTripToServer(tripId, f, savedItems)
+                // 2. Attempt sync immediately — picks up this trip + any older pending ones
+                syncUnsyncedTrips()
 
             } catch (e: Exception) {
                 Log.e("ExpensesVM", "Submit error: ${e.message}", e)
@@ -255,187 +292,86 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // ── Server submission ─────────────────────────────────────────
-    private suspend fun submitTripToServer(
-        tripId: String,
-        form: TripForm,
-        items: List<ExpenseEntity>
-    ) {
-        try {
-            val advance = form.advanceAmount.toDoubleOrNull() ?: 0.0
-            val hasReceipts = items.any { it.receiptImagePath != null }
+    // ── Public sync — called from Retry button, networkCallback, submitTrip ──
+    // Mirrors AttendanceViewModel.syncAttendanceToServer() exactly
+    fun syncUnsyncedTrips() {
+        if (syncJob?.isActive == true) return   // prevent overlapping loops
 
-            val serverId = if (hasReceipts) {
-                submitWithReceipts(form, items, advance)
-            } else {
-                submitJsonOnly(form, items, advance)
-            }
-
-            if (serverId != null) {
-                dao.markTripSynced(tripId, serverId)
-                Log.d("ExpensesVM", "Trip synced: $serverId")
-                _uiState.update { it.copy(syncMessage = "Trip submitted successfully") }
-            }
-        } catch (e: Exception) {
-            Log.e("ExpensesVM", "Server sync failed (will retry on restart): ${e.message}")
-        }
-    }
-
-    private suspend fun submitJsonOnly(
-        form: TripForm,
-        items: List<ExpenseEntity>,
-        advance: Double
-    ): String? {
-        val response = RetrofitClient.tripApi.submitTrip(
-            TripSubmitRequest(
-                stationVisited = form.stationVisited,
-                periodFrom = form.periodFrom,
-                periodTo = form.periodTo,
-                advanceAmount = advance,
-                expenses = items.map {
-                    TripExpenseItemRequest(
-                        expenseType = it.expenseType,
-                        details = it.details,
-                        travelFrom = it.travelFrom,
-                        travelTo = it.travelTo,
-                        travelMode = it.travelMode,
-                        daysCount = it.daysCount,
-                        ratePerDay = it.ratePerDay,
-                        amount = it.amount
-                    )
-                }
-            )
-        )
-        return if (response.isSuccessful && response.body()?.success == true)
-            response.body()?.data?._id
-        else {
-            Log.e("ExpensesVM", "Server error: ${response.body()?.message}")
-            null
-        }
-    }
-
-    private suspend fun submitWithReceipts(
-        form: TripForm,
-        items: List<ExpenseEntity>,
-        advance: Double
-    ): String? {
-        val textType = "text/plain".toMediaType()
-        val jsonType = "application/json".toMediaType()
-
-        val expensesJson = gson.toJson(items.map {
-            TripExpenseItemRequest(
-                expenseType = it.expenseType,
-                details = it.details,
-                travelFrom = it.travelFrom,
-                travelTo = it.travelTo,
-                travelMode = it.travelMode,
-                daysCount = it.daysCount,
-                ratePerDay = it.ratePerDay,
-                amount = it.amount
-            )
-        })
-
-        // All receipt parts use field name "receipts" to satisfy Multer's
-        // uploadExpense.array('receipts', 10).
-        // The expense array index is encoded in the filename as "expIdx_{n}_{timestamp}.jpg"
-        // so the server can map each file to the correct expense slot even when
-        // not every expense has a receipt (sparse case). Safe for concurrent
-        // multi-user submissions because each request is fully isolated on the server.
-        val receiptParts = mutableListOf<MultipartBody.Part>()
-        items.forEachIndexed { index, item ->
-            item.receiptImagePath?.let { path ->
-                val file = File(path)
-                if (file.exists()) {
-                    receiptParts.add(
-                        MultipartBody.Part.createFormData(
-                            name     = "receipts",
-                            filename = "expIdx_${index}_${System.currentTimeMillis()}.jpg",
-                            body     = file.asRequestBody("image/jpeg".toMediaType())
-                        )
-                    )
-                }
-            }
-        }
-
-        val response = RetrofitClient.tripApi.submitTripWithReceipts(
-            stationVisited = form.stationVisited.toRequestBody(textType),
-            periodFrom     = form.periodFrom.toRequestBody(textType),
-            periodTo       = form.periodTo.toRequestBody(textType),
-            advanceAmount  = advance.toString().toRequestBody(textType),
-            expenses       = expensesJson.toRequestBody(jsonType),
-            receipts       = receiptParts
-        )
-
-        return if (response.isSuccessful && response.body()?.success == true)
-            response.body()?.data?._id
-        else {
-            Log.e("ExpensesVM", "Server error (multipart): ${response.body()?.message}")
-            null
-        }
-    }
-
-    // ── Auto-sync unsynced trips on startup ───────────────────────
-    private fun syncUnsyncedTrips() {
-        viewModelScope.launch {
+        syncJob = viewModelScope.launch {
             try {
-                val unsyncedIds = dao.getUnsyncedTripIds(userId)
-                if (unsyncedIds.isEmpty()) return@launch
+                val count = repository.getUnsyncedCount(userId)
+                _uiState.update { it.copy(unsyncedCount = count) }
+                if (count == 0) return@launch
 
-                Log.d("ExpensesVM", "Found ${unsyncedIds.size} unsynced trips, retrying...")
-
-                for (tripId in unsyncedIds) {
-                    val items = dao.getItemsByTripId(tripId)
-                    if (items.isEmpty()) continue
-
-                    val first = items.first()
-                    val mockForm = TripForm(
-                        stationVisited = first.stationVisited,
-                        periodFrom     = first.periodFrom,
-                        periodTo       = first.periodTo,
-                        advanceAmount  = first.advanceAmount.toString()
-                    )
-                    submitTripToServer(tripId, mockForm, items)
+                if (!isOnline()) {
+                    Log.d("ExpensesVM", "Offline — $count trip(s) queued for sync")
+                    _uiState.update {
+                        it.copy(syncMessage = "$count trip(s) saved offline — waiting for connection")
+                    }
+                    return@launch
                 }
+
+                Log.d("ExpensesVM", "Syncing $count unsynced trip(s)...")
+                _uiState.update { it.copy(isSyncing = true) }
+
+                val result    = repository.syncAllPendingToServer(userId)
+                val remaining = repository.getUnsyncedCount(userId)
+
+                val message = when {
+                    result.total == 0                                    -> null
+                    result.failed == 0 && result.missingReceipts == 0   ->
+                        "✓ All trips synced successfully"
+                    result.failed == 0 && result.missingReceipts > 0    ->
+                        "✓ ${result.success} trip(s) synced — ${result.missingReceipts} receipt image(s) missing from device"
+                    result.success > 0                                   ->
+                        "${result.success} synced, $remaining still pending"
+                    else -> null
+                }
+
+                _uiState.update {
+                    it.copy(isSyncing = false, unsyncedCount = remaining, syncMessage = message)
+                }
+
             } catch (e: Exception) {
-                Log.e("ExpensesVM", "Startup sync error: ${e.message}")
+                Log.e("ExpensesVM", "Sync error: ${e.message}")
+                _uiState.update { it.copy(isSyncing = false) }
             }
+        }
+    }
+
+    private suspend fun refreshUnsyncedCount() {
+        try {
+            _uiState.update { it.copy(unsyncedCount = repository.getUnsyncedCount(userId)) }
+        } catch (e: Exception) {
+            Log.e("ExpensesVM", "refreshUnsyncedCount: ${e.message}")
         }
     }
 
     // ── Pull latest trip statuses from server ────────────────────
-    // Runs on every screen open so admin approve/reject is reflected immediately.
     private fun refreshStatusFromServer() {
         viewModelScope.launch {
             try {
                 val response = RetrofitClient.tripApi.getMyTrips()
                 if (!response.isSuccessful || response.body()?.success != true) return@launch
 
-                val serverTrips = response.body()!!.data
                 var updatedCount = 0
-
-                for (serverTrip in serverTrips) {
-                    // Match by the MongoDB _id stored in serverId on local records
+                for (serverTrip in response.body()!!.data) {
                     val localItems = dao.getItemsByServerId(serverTrip._id)
                     if (localItems.isEmpty()) continue
-
-                    val localStatus = localItems.first().status
-                    if (localStatus != serverTrip.status) {
+                    if (localItems.first().status != serverTrip.status) {
                         dao.updateTripStatus(localItems.first().tripId, serverTrip.status)
                         updatedCount++
-                        Log.d("ExpensesVM", "Status updated: ${serverTrip._id} → ${serverTrip.status}")
                     }
                 }
+                if (updatedCount > 0)
+                    Log.d("ExpensesVM", "$updatedCount trip status(es) refreshed from server")
 
-                if (updatedCount > 0) {
-                    Log.d("ExpensesVM", "$updatedCount trip(s) status refreshed from server")
-                }
             } catch (e: Exception) {
-                // Silent — status refresh is best-effort, don't show error to user
-                Log.w("ExpensesVM", "Status refresh failed (non-critical): ${e.message}")
+                Log.w("ExpensesVM", "Status refresh (non-critical): ${e.message}")
             }
         }
     }
 
-    fun clearError() = _uiState.update { it.copy(errorMessage = null) }
+    fun clearError()       = _uiState.update { it.copy(errorMessage = null) }
     fun clearSyncMessage() = _uiState.update { it.copy(syncMessage = null) }
 }
