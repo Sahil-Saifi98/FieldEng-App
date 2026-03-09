@@ -97,6 +97,7 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
     init {
         loadExpenses()
         syncUnsyncedTrips()
+        refreshStatusFromServer()
     }
 
     // ── Load & group from local DB ────────────────────────────────
@@ -397,6 +398,40 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
                 }
             } catch (e: Exception) {
                 Log.e("ExpensesVM", "Startup sync error: ${e.message}")
+            }
+        }
+    }
+
+    // ── Pull latest trip statuses from server ────────────────────
+    // Runs on every screen open so admin approve/reject is reflected immediately.
+    private fun refreshStatusFromServer() {
+        viewModelScope.launch {
+            try {
+                val response = RetrofitClient.tripApi.getMyTrips()
+                if (!response.isSuccessful || response.body()?.success != true) return@launch
+
+                val serverTrips = response.body()!!.data
+                var updatedCount = 0
+
+                for (serverTrip in serverTrips) {
+                    // Match by the MongoDB _id stored in serverId on local records
+                    val localItems = dao.getItemsByServerId(serverTrip._id)
+                    if (localItems.isEmpty()) continue
+
+                    val localStatus = localItems.first().status
+                    if (localStatus != serverTrip.status) {
+                        dao.updateTripStatus(localItems.first().tripId, serverTrip.status)
+                        updatedCount++
+                        Log.d("ExpensesVM", "Status updated: ${serverTrip._id} → ${serverTrip.status}")
+                    }
+                }
+
+                if (updatedCount > 0) {
+                    Log.d("ExpensesVM", "$updatedCount trip(s) status refreshed from server")
+                }
+            } catch (e: Exception) {
+                // Silent — status refresh is best-effort, don't show error to user
+                Log.w("ExpensesVM", "Status refresh failed (non-critical): ${e.message}")
             }
         }
     }

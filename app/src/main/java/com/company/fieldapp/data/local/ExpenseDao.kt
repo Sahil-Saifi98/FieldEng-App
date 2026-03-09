@@ -29,6 +29,10 @@ interface ExpenseDao {
     @Query("UPDATE expenses SET isSynced = 1, serverId = :serverId WHERE tripId = :tripId")
     suspend fun markTripSynced(tripId: String, serverId: String)
 
+    // Match local trips to server trips by MongoDB _id (used for status refresh)
+    @Query("SELECT * FROM expenses WHERE serverId = :serverId LIMIT 1")
+    suspend fun getItemsByServerId(serverId: String): List<ExpenseEntity>
+
     @Query("UPDATE expenses SET status = :status WHERE tripId = :tripId")
     suspend fun updateTripStatus(tripId: String, status: String)
 
