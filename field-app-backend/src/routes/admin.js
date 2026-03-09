@@ -14,6 +14,12 @@ const {
   exportAttendancePDF,
   exportAttendanceJSON
 } = require('../controllers/adminController');
+
+const {
+  exportUserExpensesPdf,
+  exportAllExpensesPdf,
+  exportAllExpensesCSV
+} = require('../controllers/tripExportController');
 const { protect, authorize } = require('../middleware/auth');
 
 // All routes require authentication and admin role
@@ -112,5 +118,10 @@ router.post('/export/all', exportAllData);
 router.get('/export/attendance/csv', exportAttendanceCSV);
 router.get('/export/attendance/pdf', exportAttendancePDF);
 router.get('/export/attendance/json', exportAttendanceJSON);
+
+// Expense Export Routes
+router.get('/export/expenses/pdf/:userId', exportUserExpensesPdf);
+router.get('/export/expenses/pdf', exportAllExpensesPdf);
+router.get('/export/expenses/csv', exportAllExpensesCSV);
 
 module.exports = router;

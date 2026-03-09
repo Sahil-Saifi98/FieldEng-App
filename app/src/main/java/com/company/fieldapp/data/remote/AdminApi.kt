@@ -5,7 +5,8 @@ import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.*
 
-// Admin Attendance Response
+// ── Response models ───────────────────────────────────────────────
+
 data class AdminAttendanceResponse(
     val success: Boolean,
     val message: String? = null,
@@ -39,7 +40,6 @@ data class AdminAttendanceItem(
     val createdAt: String
 )
 
-// Admin Stats Response
 data class AdminStatsResponse(
     val success: Boolean,
     val data: AdminStats
@@ -58,7 +58,6 @@ data class TopUser(
     val count: Int
 )
 
-// Admin Users Response
 data class AdminUsersResponse(
     val success: Boolean,
     val count: Int,
@@ -77,12 +76,14 @@ data class AdminUser(
     val createdAt: String
 )
 
+// ── API interface ─────────────────────────────────────────────────
+
 interface AdminApi {
 
     @GET("admin/attendance")
     suspend fun getAllAttendance(
         @Query("startDate") startDate: String? = null,
-        @Query("endDate") endDate: String? = null,
+        @Query("endDate")   endDate: String? = null,
         @Query("employeeId") employeeId: String? = null
     ): Response<AdminAttendanceResponse>
 
@@ -107,7 +108,8 @@ interface AdminApi {
         @Path("id") userId: String
     ): Response<AuthResponse>
 
-    // Export endpoints that return files
+    // ── ZIP exports (support exportType: "attendance" | "expenses" | "all") ──
+
     @Streaming
     @POST("admin/export/user/{userId}")
     suspend fun exportUserDataZip(
@@ -121,24 +123,53 @@ interface AdminApi {
         @Body requestBody: RequestBody
     ): Response<ResponseBody>
 
+    // ── Quick exports: Attendance ──────────────────────────────────
+
     @Streaming
     @GET("admin/export/attendance/csv")
     suspend fun exportAttendanceCSV(
         @Query("startDate") startDate: String? = null,
-        @Query("endDate") endDate: String? = null
+        @Query("endDate")   endDate: String? = null
     ): Response<ResponseBody>
 
     @Streaming
     @GET("admin/export/attendance/pdf")
     suspend fun exportAttendancePDF(
         @Query("startDate") startDate: String? = null,
-        @Query("endDate") endDate: String? = null
+        @Query("endDate")   endDate: String? = null
     ): Response<ResponseBody>
 
     @Streaming
     @GET("admin/export/attendance/json")
     suspend fun exportAttendanceJSON(
         @Query("startDate") startDate: String? = null,
-        @Query("endDate") endDate: String? = null
+        @Query("endDate")   endDate: String? = null
+    ): Response<ResponseBody>
+
+    // ── Quick exports: Expenses ────────────────────────────────────
+
+    /** All employees — expense PDF (one page per trip, TOUR_FORM layout) */
+    @Streaming
+    @GET("admin/export/expenses/pdf")
+    suspend fun exportAllExpensesPDF(
+        @Query("startDate") startDate: String? = null,
+        @Query("endDate")   endDate: String? = null
+    ): Response<ResponseBody>
+
+    /** All employees — expense CSV */
+    @Streaming
+    @GET("admin/export/expenses/csv")
+    suspend fun exportAllExpensesCSV(
+        @Query("startDate") startDate: String? = null,
+        @Query("endDate")   endDate: String? = null
+    ): Response<ResponseBody>
+
+    /** Single user — expense PDF */
+    @Streaming
+    @GET("admin/export/expenses/pdf/{userId}")
+    suspend fun exportUserExpensesPDF(
+        @Path("userId")     userId: String,
+        @Query("startDate") startDate: String? = null,
+        @Query("endDate")   endDate: String? = null
     ): Response<ResponseBody>
 }

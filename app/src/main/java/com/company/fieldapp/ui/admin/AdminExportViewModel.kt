@@ -30,6 +30,13 @@ import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 
+// Export type options
+enum class ExportType(val label: String, val value: String) {
+    ALL("All Data", "all"),
+    ATTENDANCE("Attendance", "attendance"),
+    EXPENSES("Expenses", "expenses")
+}
+
 class AdminExportViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _users = MutableStateFlow<List<AdminUser>>(emptyList())
@@ -50,16 +57,22 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
     private val _endDate = MutableStateFlow<String?>(null)
     val endDate: StateFlow<String?> = _endDate
 
+    // Export type for per-user ZIP section
+    private val _userExportType = MutableStateFlow(ExportType.ALL)
+    val userExportType: StateFlow<ExportType> = _userExportType
+
+    // Export type for all-data ZIP section
+    private val _allExportType = MutableStateFlow(ExportType.ALL)
+    val allExportType: StateFlow<ExportType> = _allExportType
+
     private val context = application.applicationContext
 
     init {
         loadUsers()
-        // Set default date range (last 7 days instead of 30)
         val calendar = Calendar.getInstance()
         val endDateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(calendar.time)
         calendar.add(Calendar.DAY_OF_YEAR, -7)
         val startDateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(calendar.time)
-
         _startDate.value = startDateStr
         _endDate.value = endDateStr
     }
@@ -68,12 +81,9 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             try {
                 val response = RetrofitClient.adminApi.getAllUsers()
-                if (response.isSuccessful && response.body() != null) {
-                    val body = response.body()!!
-                    if (body.success) {
-                        _users.value = body.data
-                        Log.d("AdminExportVM", "Loaded ${body.data.size} users")
-                    }
+                if (response.isSuccessful && response.body()?.success == true) {
+                    _users.value = response.body()!!.data
+                    Log.d("AdminExportVM", "Loaded ${_users.value.size} users")
                 }
             } catch (e: Exception) {
                 Log.e("AdminExportVM", "Error loading users: ${e.message}", e)
@@ -97,108 +107,77 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
         _exportStatus.value = null
     }
 
+    fun setUserExportType(type: ExportType) {
+        _userExportType.value = type
+        _exportStatus.value = null
+    }
+
+    fun setAllExportType(type: ExportType) {
+        _allExportType.value = type
+        _exportStatus.value = null
+    }
+
+    // ── Per-user ZIP export ───────────────────────────────────────────
+
     fun exportUserData() {
         val user = _selectedUser.value ?: return
-
         viewModelScope.launch {
             _isLoading.value = true
             _exportStatus.value = null
-
             try {
-                Log.d("AdminExportVM", "Starting export for user: ${user.employeeId}")
-
-                // Create request body with date range
                 val jsonBody = JSONObject().apply {
                     _startDate.value?.let { put("startDate", it) }
                     _endDate.value?.let { put("endDate", it) }
+                    put("exportType", _userExportType.value.value)
                 }
                 val requestBody = jsonBody.toString()
                     .toRequestBody("application/json".toMediaTypeOrNull())
 
-                // Make API call
+                Log.d("AdminExportVM", "Exporting user ${user.employeeId}, type=${_userExportType.value.value}")
                 val response = RetrofitClient.adminApi.exportUserDataZip(user._id, requestBody)
 
-                Log.d("AdminExportVM", "Response code: ${response.code()}")
-
                 if (response.isSuccessful && response.body() != null) {
-                    val fileName = "${user.employeeId}_export_${System.currentTimeMillis()}.zip"
-                    val body = response.body()!!
-
-                    // Check content length
-                    val contentLength = body.contentLength()
-                    Log.d("AdminExportVM", "Response body size: $contentLength bytes")
-
-                    if (contentLength == 0L) {
-                        _exportStatus.value = ExportStatus(
-                            isSuccess = false,
-                            message = "Server returned empty file"
-                        )
-                        showToast("Server returned empty file")
-                        return@launch
-                    }
-
-                    // Save to Downloads with proper buffering
-                    val savedFile = saveToDownloadsOptimized(body, fileName)
-
+                    val typeTag = _userExportType.value.value
+                    val fileName = "${user.employeeId}_${typeTag}_export_${System.currentTimeMillis()}.zip"
+                    val savedFile = saveToDownloadsOptimized(response.body()!!, fileName)
                     if (savedFile != null) {
-                        _exportStatus.value = ExportStatus(
-                            isSuccess = true,
-                            message = "✅ Downloaded to Downloads folder: $fileName"
-                        )
-                        showToast("File downloaded successfully!")
-                        Log.d("AdminExportVM", "Exported user data: $savedFile")
+                        _exportStatus.value = ExportStatus(true, "✅ Saved to Downloads: $fileName")
+                        showToast("Download complete!")
                     } else {
-                        _exportStatus.value = ExportStatus(
-                            isSuccess = false,
-                            message = "Failed to save export file"
-                        )
-                        showToast("Failed to save file")
+                        _exportStatus.value = ExportStatus(false, "Failed to save file")
                     }
                 } else {
-                    val errorMsg = when (response.code()) {
+                    val msg = when (response.code()) {
                         404 -> "No records found for selected date range"
-                        502 -> "Server error. Try a smaller date range."
-                        503 -> "Service unavailable. Please try again."
-                        504 -> "Request timeout. Try a smaller date range."
-                        else -> "Failed to export: ${response.code()}"
+                        504 -> "Timeout. Try a smaller date range."
+                        else -> "Export failed: ${response.code()}"
                     }
-
-                    _exportStatus.value = ExportStatus(
-                        isSuccess = false,
-                        message = errorMsg
-                    )
-                    showToast(errorMsg)
+                    _exportStatus.value = ExportStatus(false, msg)
+                    showToast(msg)
                 }
             } catch (e: Exception) {
-                val errorMsg = when {
-                    e.message?.contains("timeout") == true ->
-                        "Request timeout. Try a smaller date range (2-3 days max)."
-                    e.message?.contains("Unable to resolve host") == true ->
-                        "Network error. Check your connection."
-                    else -> "Error: ${e.message}"
-                }
-
-                _exportStatus.value = ExportStatus(
-                    isSuccess = false,
-                    message = errorMsg
-                )
-                showToast(errorMsg)
-                Log.e("AdminExportVM", "Export error: ${e.message}", e)
+                val msg = if (e.message?.contains("timeout") == true)
+                    "Timeout. Try a smaller date range (2-3 days)."
+                else "Error: ${e.message}"
+                _exportStatus.value = ExportStatus(false, msg)
+                Log.e("AdminExportVM", "exportUserData error", e)
             } finally {
                 _isLoading.value = false
             }
         }
     }
 
+    // ── All-data ZIP export ───────────────────────────────────────────
+
     fun exportAllData() {
         viewModelScope.launch {
             _isLoading.value = true
             _exportStatus.value = null
-
             try {
                 val jsonBody = JSONObject().apply {
                     _startDate.value?.let { put("startDate", it) }
                     _endDate.value?.let { put("endDate", it) }
+                    put("exportType", _allExportType.value.value)
                 }
                 val requestBody = jsonBody.toString()
                     .toRequestBody("application/json".toMediaTypeOrNull())
@@ -206,103 +185,66 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                 val response = RetrofitClient.adminApi.exportAllDataZip(requestBody)
 
                 if (response.isSuccessful && response.body() != null) {
-                    val fileName = "all_data_export_${System.currentTimeMillis()}.zip"
+                    val typeTag = _allExportType.value.value
+                    val fileName = "all_${typeTag}_export_${System.currentTimeMillis()}.zip"
                     val savedFile = saveToDownloadsOptimized(response.body()!!, fileName)
-
                     if (savedFile != null) {
-                        _exportStatus.value = ExportStatus(
-                            isSuccess = true,
-                            message = "✅ Downloaded to Downloads: $fileName"
-                        )
-                        showToast("File downloaded successfully!")
+                        _exportStatus.value = ExportStatus(true, "✅ Saved to Downloads: $fileName")
+                        showToast("Download complete!")
                     } else {
-                        _exportStatus.value = ExportStatus(
-                            isSuccess = false,
-                            message = "Failed to save export file"
-                        )
+                        _exportStatus.value = ExportStatus(false, "Failed to save file")
                     }
                 } else {
-                    val errorMsg = when (response.code()) {
+                    val msg = when (response.code()) {
                         404 -> "No records found for selected date range"
-                        502 -> "Server error. Try a smaller date range."
-                        503 -> "Service unavailable. Please try again."
-                        504 -> "Timeout. Try exporting fewer records."
+                        504 -> "Timeout. Try a smaller date range."
                         else -> "Export failed: ${response.code()}"
                     }
-                    _exportStatus.value = ExportStatus(isSuccess = false, message = errorMsg)
-                    showToast(errorMsg)
+                    _exportStatus.value = ExportStatus(false, msg)
+                    showToast(msg)
                 }
             } catch (e: Exception) {
-                val errorMsg = when {
-                    e.message?.contains("timeout") == true ->
-                        "Timeout. Try a smaller date range."
-                    else -> "Error: ${e.message}"
-                }
-                _exportStatus.value = ExportStatus(
-                    isSuccess = false,
-                    message = errorMsg
-                )
-                showToast("Export failed: $errorMsg")
-                Log.e("AdminExportVM", "Export all error: ${e.message}", e)
+                val msg = if (e.message?.contains("timeout") == true)
+                    "Timeout. Try a smaller date range." else "Error: ${e.message}"
+                _exportStatus.value = ExportStatus(false, msg)
+                Log.e("AdminExportVM", "exportAllData error", e)
             } finally {
                 _isLoading.value = false
             }
         }
     }
 
+    // ── Quick exports ─────────────────────────────────────────────────
+
     fun exportAttendance(format: String) {
         viewModelScope.launch {
             _isLoading.value = true
             _exportStatus.value = null
-
             try {
                 val response = when (format) {
-                    "csv" -> RetrofitClient.adminApi.exportAttendanceCSV(
-                        _startDate.value,
-                        _endDate.value
-                    )
-                    "pdf" -> RetrofitClient.adminApi.exportAttendancePDF(
-                        _startDate.value,
-                        _endDate.value
-                    )
-                    else -> {
-                        _exportStatus.value = ExportStatus(
-                            isSuccess = false,
-                            message = "Unsupported format: $format"
-                        )
+                    "csv" -> RetrofitClient.adminApi.exportAttendanceCSV(_startDate.value, _endDate.value)
+                    "pdf" -> RetrofitClient.adminApi.exportAttendancePDF(_startDate.value, _endDate.value)
+                    else  -> {
+                        _exportStatus.value = ExportStatus(false, "Unsupported format: $format")
                         _isLoading.value = false
                         return@launch
                     }
                 }
-
                 if (response.isSuccessful && response.body() != null) {
                     val fileName = "attendance_${System.currentTimeMillis()}.$format"
-                    val savedFile = saveToDownloadsOptimized(response.body()!!, fileName)
-
-                    if (savedFile != null) {
-                        _exportStatus.value = ExportStatus(
-                            isSuccess = true,
-                            message = "✅ Downloaded: $fileName"
-                        )
-                        showToast("Downloaded successfully!")
+                    val saved = saveToDownloadsOptimized(response.body()!!, fileName)
+                    if (saved != null) {
+                        _exportStatus.value = ExportStatus(true, "✅ Downloaded: $fileName")
+                        showToast("Downloaded!")
                     } else {
-                        _exportStatus.value = ExportStatus(
-                            isSuccess = false,
-                            message = "Failed to save file"
-                        )
+                        _exportStatus.value = ExportStatus(false, "Failed to save file")
                     }
                 } else {
-                    _exportStatus.value = ExportStatus(
-                        isSuccess = false,
-                        message = "Export failed: ${response.code()}"
-                    )
+                    _exportStatus.value = ExportStatus(false, "Export failed: ${response.code()}")
                 }
             } catch (e: Exception) {
-                _exportStatus.value = ExportStatus(
-                    isSuccess = false,
-                    message = "Error: ${e.message}"
-                )
-                Log.e("AdminExportVM", "Export attendance error: ${e.message}", e)
+                _exportStatus.value = ExportStatus(false, "Error: ${e.message}")
+                Log.e("AdminExportVM", "exportAttendance error", e)
             } finally {
                 _isLoading.value = false
             }
@@ -310,136 +252,135 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun exportExpenses(format: String) {
-        _exportStatus.value = ExportStatus(
-            isSuccess = false,
-            message = "Expenses module not yet implemented"
-        )
+        viewModelScope.launch {
+            _isLoading.value = true
+            _exportStatus.value = null
+            try {
+                val response = when (format) {
+                    "pdf" -> RetrofitClient.adminApi.exportAllExpensesPDF(
+                        _startDate.value, _endDate.value
+                    )
+                    "csv" -> RetrofitClient.adminApi.exportAllExpensesCSV(
+                        _startDate.value, _endDate.value
+                    )
+                    else -> {
+                        _exportStatus.value = ExportStatus(false, "Unsupported format: $format")
+                        _isLoading.value = false
+                        return@launch
+                    }
+                }
+                if (response.isSuccessful && response.body() != null) {
+                    val fileName = "expenses_${System.currentTimeMillis()}.$format"
+                    val saved = saveToDownloadsOptimized(response.body()!!, fileName)
+                    if (saved != null) {
+                        _exportStatus.value = ExportStatus(true, "✅ Downloaded: $fileName")
+                        showToast("Downloaded!")
+                    } else {
+                        _exportStatus.value = ExportStatus(false, "Failed to save file")
+                    }
+                } else {
+                    _exportStatus.value = ExportStatus(false, "Export failed: ${response.code()}")
+                }
+            } catch (e: Exception) {
+                _exportStatus.value = ExportStatus(false, "Error: ${e.message}")
+                Log.e("AdminExportVM", "exportExpenses error", e)
+            } finally {
+                _isLoading.value = false
+            }
+        }
     }
 
     fun exportTasks(format: String) {
-        _exportStatus.value = ExportStatus(
-            isSuccess = false,
-            message = "Tasks module not yet implemented"
-        )
+        _exportStatus.value = ExportStatus(false, "Tasks export coming soon")
     }
 
-    /**
-     * Optimized file download with proper buffering
-     */
+    // ── File saving ───────────────────────────────────────────────────
+
     private suspend fun saveToDownloadsOptimized(body: ResponseBody, fileName: String): String? {
         return withContext(Dispatchers.IO) {
             try {
                 val inputStream = body.byteStream()
-
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    // Use MediaStore for Android 10+
                     val contentValues = ContentValues().apply {
                         put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
                         put(MediaStore.MediaColumns.MIME_TYPE, getMimeType(fileName))
                         put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                     }
-
-                    val resolver = context.contentResolver
-                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
-
-                    uri?.let {
-                        resolver.openOutputStream(it)?.use { outputStream ->
-                            copyStreamWithProgress(inputStream, outputStream)
-                        }
-                        Log.d("AdminExportVM", "File saved via MediaStore: $uri")
-                        inputStream.close()
-                        fileName
+                    val uri = context.contentResolver.insert(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues
+                    ) ?: throw Exception("Could not create file")
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        copyStream(inputStream, out)
                     }
+                    inputStream.close()
+                    fileName
                 } else {
-                    // For Android 9 and below
+                    @Suppress("DEPRECATION")
                     val downloadsDir = Environment.getExternalStoragePublicDirectory(
                         Environment.DIRECTORY_DOWNLOADS
                     )
-
-                    if (!downloadsDir.exists()) {
-                        downloadsDir.mkdirs()
-                    }
-
+                    if (!downloadsDir.exists()) downloadsDir.mkdirs()
                     val file = File(downloadsDir, fileName)
-                    FileOutputStream(file).use { outputStream ->
-                        copyStreamWithProgress(inputStream, outputStream)
-                    }
-
+                    FileOutputStream(file).use { out -> copyStream(inputStream, out) }
                     inputStream.close()
-
-                    // Notify download manager
                     notifyDownloadManager(file, fileName)
-
-                    Log.d("AdminExportVM", "File saved: ${file.absolutePath}")
                     file.absolutePath
                 }
             } catch (e: Exception) {
-                Log.e("AdminExportVM", "Error saving to downloads: ${e.message}", e)
+                Log.e("AdminExportVM", "Save error: ${e.message}", e)
                 null
             }
         }
     }
 
-    /**
-     * Copy stream with progress logging and proper buffering
-     */
-    private fun copyStreamWithProgress(input: InputStream, output: OutputStream) {
-        val buffer = ByteArray(16384) // 16KB buffer
+    private fun copyStream(input: InputStream, output: OutputStream) {
+        val buffer = ByteArray(16384)
         var bytesRead: Int
-        var totalBytes = 0L
-        var lastLogTime = System.currentTimeMillis()
-
+        var total = 0L
+        var lastLog = System.currentTimeMillis()
         while (input.read(buffer).also { bytesRead = it } != -1) {
             output.write(buffer, 0, bytesRead)
-            totalBytes += bytesRead
-
-            // Log progress every 2 seconds
-            val currentTime = System.currentTimeMillis()
-            if (currentTime - lastLogTime > 2000) {
-                Log.d("AdminExportVM", "Downloaded: ${totalBytes / 1024} KB")
-                lastLogTime = currentTime
+            total += bytesRead
+            val now = System.currentTimeMillis()
+            if (now - lastLog > 2000) {
+                Log.d("AdminExportVM", "Downloaded: ${total / 1024} KB")
+                lastLog = now
             }
         }
-
         output.flush()
-        Log.d("AdminExportVM", "Total downloaded: ${totalBytes / 1024} KB (${totalBytes} bytes)")
-
-        if (totalBytes == 0L) {
-            throw Exception("Downloaded file is empty (0 bytes)")
-        }
+        Log.d("AdminExportVM", "Total: ${total / 1024} KB")
+        if (total == 0L) throw Exception("Downloaded file is empty")
     }
 
     private fun notifyDownloadManager(file: File, fileName: String) {
         try {
-            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-            downloadManager.addCompletedDownload(
-                fileName,
-                "FieldApp Export",
-                true,
-                getMimeType(fileName),
-                file.absolutePath,
-                file.length(),
-                true
+            @Suppress("DEPRECATION")
+            val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            dm.addCompletedDownload(
+                fileName, "FieldApp Export", true,
+                getMimeType(fileName), file.absolutePath, file.length(), true
             )
         } catch (e: Exception) {
-            Log.e("AdminExportVM", "Error notifying download manager: ${e.message}")
+            Log.e("AdminExportVM", "DownloadManager notify error: ${e.message}")
         }
     }
 
-    private fun getMimeType(fileName: String): String {
-        return when {
-            fileName.endsWith(".zip") -> "application/zip"
-            fileName.endsWith(".pdf") -> "application/pdf"
-            fileName.endsWith(".csv") -> "text/csv"
-            fileName.endsWith(".json") -> "application/json"
-            else -> "application/octet-stream"
-        }
+    private fun getMimeType(fileName: String) = when {
+        fileName.endsWith(".zip")  -> "application/zip"
+        fileName.endsWith(".pdf")  -> "application/pdf"
+        fileName.endsWith(".csv")  -> "text/csv"
+        fileName.endsWith(".json") -> "application/json"
+        else                       -> "application/octet-stream"
     }
 
     private fun showToast(message: String) {
         viewModelScope.launch(Dispatchers.Main) {
             Toast.makeText(context, message, Toast.LENGTH_LONG).show()
         }
+    }
+
+    fun clearStatus() {
+        _exportStatus.value = null
     }
 }
 
