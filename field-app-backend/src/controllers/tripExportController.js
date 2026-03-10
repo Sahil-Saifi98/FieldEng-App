@@ -5,37 +5,33 @@ const fs = require('fs');
 
 // ── Palette — charcoal/slate, no blue ────────────────────────────
 const COLOR = {
-  dark:      '#2C2C2C',   // title bar, section headers
-  darkLite:  '#EBEBEB',   // section header row bg
-  midGrey:   '#555555',   // sub-labels, column headers text
-  labelBg:   '#EFEFEF',   // info grid label strip
-  rowAlt:    '#F5F5F5',   // alternating row shade
-  totalHl:   '#E8E8E8',   // payable row highlight
-  secBadge:  '#D0D0D0',   // section number badge
-  sigBg:     '#F8F8F8',   // signature row bg
+  dark:      '#2C2C2C',
+  darkLite:  '#EBEBEB',
+  midGrey:   '#555555',
+  labelBg:   '#EFEFEF',
+  rowAlt:    '#F5F5F5',
+  totalHl:   '#E8E8E8',
+  secBadge:  '#D0D0D0',
+  sigBg:     '#F8F8F8',
   border:    '#BBBBBB',
   liteTxt:   '#888888',
   greyTxt:   '#555555',
   white:     '#FFFFFF',
   black:     '#000000',
-  // Status
   greenBg:   '#E8F5E9',  greenBdr: '#4CAF50',  greenTxt: '#1B5E20',
   redBg:     '#FFEBEE',  redBdr:   '#F44336',  redTxt:   '#B71C1C',
   ambBg:     '#FFF8E1',  ambBdr:   '#FFB300',  ambTxt:   '#E65100',
 };
 
-// ── Layout constants ──────────────────────────────────────────────
-const M      = 38;              // page margin (pt)
-const PW     = 595 - M * 2;    // usable width on A4 = ~519 pt
+const M      = 38;
+const PW     = 595 - M * 2;
 const ROW_H  = 17;
 const HEAD_H = 19;
 const SEC_H  = 18;
 
-// Column widths
 const CW = { sr: 20, detail: 155, from: 82, to: 70, mode: 55, days: 30 };
-CW.amt = PW - CW.sr - CW.detail - CW.from - CW.to - CW.mode - CW.days; // ~107
+CW.amt = PW - CW.sr - CW.detail - CW.from - CW.to - CW.mode - CW.days;
 
-// Column x positions (cumulative)
 const CX = { sr: M };
 ['detail','from','to','mode','days','amt'].reduce((acc, k) => {
   const prev = Object.keys(CX).slice(-1)[0];
@@ -43,7 +39,6 @@ const CX = { sr: M };
   return CX;
 }, CX);
 
-// ── Amount formatter — Indian grouping, Rs. prefix ────────────────
 function fmtRs(n) {
   n = Number(n) || 0;
   const dec = n.toFixed(2).split('.')[1];
@@ -66,8 +61,6 @@ function fmtDate(d) {
   return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-// ── PDFKit draw helpers ───────────────────────────────────────────
-
 function fillRect(doc, x, y, w, h, color) {
   doc.save().rect(x, y, w, h).fill(color).restore();
 }
@@ -84,7 +77,6 @@ function vLine(doc, x, y1, y2, color = COLOR.border, lw = 0.5) {
   doc.save().moveTo(x, y1).lineTo(x, y2).lineWidth(lw).stroke(color).restore();
 }
 
-// Draw text with optional right/center alignment within a width
 function drawText(doc, text, x, y, { font = 'Helvetica', size = 8, color = COLOR.black,
   align = 'left', width = null } = {}) {
   doc.font(font).fontSize(size).fillColor(color);
@@ -94,29 +86,67 @@ function drawText(doc, text, x, y, { font = 'Helvetica', size = 8, color = COLOR
   else                                   doc.text(text, x, y, { lineBreak: false });
 }
 
-// Draw all vertical column dividers for a row band
 function colDividers(doc, yTop, h) {
   ['detail','from','to','mode','days','amt'].forEach(k => {
     vLine(doc, CX[k], yTop, yTop + h, COLOR.border, 0.35);
   });
 }
 
-// Draw the column-name header row (SR | DETAILS | FROM... | AMOUNT)
-function drawTableHeader(doc, y) {
-  fillRect(doc, M, y, PW, HEAD_H, COLOR.dark);
-  strokeRect(doc, M, y, PW, HEAD_H, COLOR.dark, 0.5);
-  const cols = [
+// ── Per-section column headers ────────────────────────────────────
+const SECTION_COLS = {
+  'Air / Train / Bus': [
     { label: 'SR',           key: 'sr',     align: 'center' },
     { label: 'DETAILS',      key: 'detail', align: 'left'   },
-    { label: 'FROM / PLACE', key: 'from',   align: 'left'   },
-    { label: 'TO / DAYS',    key: 'to',     align: 'left'   },
+    { label: 'FROM',         key: 'from',   align: 'left'   },
+    { label: 'TO',           key: 'to',     align: 'left'   },
     { label: 'MODE',         key: 'mode',   align: 'left'   },
     { label: 'DAYS',         key: 'days',   align: 'center' },
     { label: 'AMOUNT (Rs.)', key: 'amt',    align: 'right'  },
-  ];
-  cols.forEach(({ label, key, align }) => {
-    drawText(doc, label, CX[key] + 3, y + 5, {
-      font: 'Helvetica-Bold', size: 7.5, color: COLOR.white, align, width: CW[key] - 4,
+  ],
+  'Hotel / Lodging': [
+    { label: 'SR',           key: 'sr',     align: 'center' },
+    { label: 'HOTEL / PLACE',key: 'detail', align: 'left'   },
+    { label: 'CHECK-IN',     key: 'from',   align: 'left'   },
+    { label: 'NIGHTS',       key: 'to',     align: 'left'   },
+    { label: 'TYPE',         key: 'mode',   align: 'left'   },
+    { label: 'NIGHTS',       key: 'days',   align: 'center' },
+    { label: 'AMOUNT (Rs.)', key: 'amt',    align: 'right'  },
+  ],
+  'Local Conveyance': [
+    { label: 'SR',           key: 'sr',     align: 'center' },
+    { label: 'PURPOSE',      key: 'detail', align: 'left'   },
+    { label: 'FROM',         key: 'from',   align: 'left'   },
+    { label: 'TO',           key: 'to',     align: 'left'   },
+    { label: 'VEHICLE TYPE', key: 'mode',   align: 'left'   },
+    { label: 'TRIPS',        key: 'days',   align: 'center' },
+    { label: 'AMOUNT (Rs.)', key: 'amt',    align: 'right'  },
+  ],
+  'Daily Allowance': [
+    { label: 'SR',           key: 'sr',     align: 'center' },
+    { label: 'CITY / PLACE', key: 'detail', align: 'left'   },
+    { label: 'FROM DATE',    key: 'from',   align: 'left'   },
+    { label: 'TO DATE',      key: 'to',     align: 'left'   },
+    { label: 'RATE/DAY',     key: 'mode',   align: 'left'   },
+    { label: 'DAYS',         key: 'days',   align: 'center' },
+    { label: 'AMOUNT (Rs.)', key: 'amt',    align: 'right'  },
+  ],
+  'Other Expenses': [
+    { label: 'SR',           key: 'sr',     align: 'center' },
+    { label: 'DESCRIPTION',  key: 'detail', align: 'left'   },
+    { label: 'PARTICULARS',  key: 'from',   align: 'left'   },
+    { label: 'REFERENCE',    key: 'to',     align: 'left'   },
+    { label: 'CATEGORY',     key: 'mode',   align: 'left'   },
+    { label: '',             key: 'days',   align: 'center' },
+    { label: 'AMOUNT (Rs.)', key: 'amt',    align: 'right'  },
+  ],
+};
+
+function drawSectionColHeader(doc, y, key) {
+  const cols = SECTION_COLS[key] || SECTION_COLS['Other Expenses'];
+  fillRect(doc, M, y, PW, HEAD_H, '#3D3D3D');
+  cols.forEach(({ label, key: k, align }) => {
+    drawText(doc, label, CX[k] + 3, y + 5, {
+      font: 'Helvetica-Bold', size: 7, color: COLOR.white, align, width: CW[k] - 4,
     });
   });
   colDividers(doc, y, HEAD_H);
@@ -163,12 +193,10 @@ function generateTripPdf(doc, trip, isFirstTrip) {
     if (i > 0) hLine(doc, M, ry, PW, COLOR.border, 0.5);
     vLine(doc, M + C1W, ry, ry + INFO_CELL_H, COLOR.border, 0.5);
 
-    // Col 1
     fillRect(doc, M,      ry, C1W, LABEL_H, COLOR.labelBg);
     drawText(doc, l1, M + 5, ry + 3, { font: 'Helvetica-Bold', size: 6.5, color: COLOR.midGrey });
     drawText(doc, v1, M + 5, ry + LABEL_H + 4, { font: 'Helvetica-Bold', size: 9 });
 
-    // Col 2
     fillRect(doc, M + C1W, ry, C2W, LABEL_H, COLOR.labelBg);
     drawText(doc, l2, M + C1W + 5, ry + 3, { font: 'Helvetica-Bold', size: 6.5, color: COLOR.midGrey });
     drawText(doc, v2, M + C1W + 5, ry + LABEL_H + 4, { font: 'Helvetica-Bold', size: 9 });
@@ -176,10 +204,7 @@ function generateTripPdf(doc, trip, isFirstTrip) {
 
   cy += INFO_CELL_H * infoRows.length + 10;
 
-  // ── 3. TABLE COLUMN HEADERS ──────────────────────────────────
-  cy = drawTableHeader(doc, cy);
-
-  // ── 4. EXPENSE SECTIONS ──────────────────────────────────────
+  // ── 3+4. EXPENSE SECTIONS (each has its own column header) ─────
   const sections = [
     { num: 1, title: 'AIR / TRAIN / BUS FARE',          key: 'Air / Train / Bus'  },
     { num: 2, title: 'HOTEL BOOKING / LODGING CHARGE',   key: 'Hotel / Lodging'    },
@@ -193,16 +218,20 @@ function generateTripPdf(doc, trip, isFirstTrip) {
   sections.forEach(({ num, title, key }) => {
     const items = (trip.expenses || []).filter(e => e.expenseType === key);
 
-    // Section header row — 1. 2. 3. in SR cell, bold title in detail cell
+    // Section title row
     fillRect(doc, M, cy, PW, SEC_H, COLOR.darkLite);
     hLine(doc, M, cy, PW, COLOR.border, 0.4);
-    colDividers(doc, cy, SEC_H);
     drawText(doc, `${num}.`, CX.sr, cy + 4, {
-      font: 'Helvetica-Bold', size: 8, color: COLOR.dark, align: 'center', width: CW.sr,
+      font: 'Helvetica-Bold', size: 8.5, color: COLOR.dark, align: 'center', width: CW.sr,
     });
-    drawText(doc, title, CX.detail + 3, cy + 4, { font: 'Helvetica-Bold', size: 8, color: COLOR.dark });
+    drawText(doc, title, CX.detail + 3, cy + 5, {
+      font: 'Helvetica-Bold', size: 8.5, color: COLOR.dark,
+    });
     hLine(doc, M, cy + SEC_H, PW, COLOR.border, 0.4);
     cy += SEC_H;
+
+    // Per-section column headers
+    cy = drawSectionColHeader(doc, cy, key);
 
     if (items.length === 0) {
       fillRect(doc, M, cy, PW, ROW_H, COLOR.rowAlt);
@@ -216,43 +245,54 @@ function generateTripPdf(doc, trip, isFirstTrip) {
       items.forEach((item, idx) => {
         fillRect(doc, M, cy, PW, ROW_H, idx % 2 === 0 ? COLOR.white : COLOR.rowAlt);
 
-        // SR — a, b, c... per section
-        const letter = String.fromCharCode(97 + idx);  // 97 = 'a'
+        const letter = String.fromCharCode(97 + idx);
         drawText(doc, `${letter}.`, CX.sr, cy + 4, {
           size: 8, color: COLOR.greyTxt, align: 'center', width: CW.sr,
         });
 
-        // Details — clip to fit
-        const det = (item.details || item.expenseType || '').substring(0, 25) +
-          ((item.details || '').length > 25 ? '...' : '');
-        drawText(doc, det, CX.detail + 3, cy + 4, { size: 8 });
+        const det = (item.details || '').substring(0, 28) +
+          ((item.details || '').length > 28 ? '\u2026' : '');
+        drawText(doc, det || '\u2014', CX.detail + 3, cy + 4, { size: 8 });
 
-        // From / Place
-        const fromVal = (item.travelFrom || '').substring(0, 13) ||
-          (key !== 'Daily Allowance' && key !== 'Other Expenses' ? '—' : '');
-        drawText(doc, fromVal, CX.from + 3, cy + 4, { size: 8 });
+        let fromVal, toVal, modeVal, daysVal;
 
-        // To / Days
-        let toVal;
-        if (key === 'Hotel / Lodging') {
-          toVal = item.daysCount > 0 ? `${item.daysCount} day${item.daysCount !== 1 ? 's' : ''}` : '—';
+        if (key === 'Air / Train / Bus') {
+          // Travel mode (Train/Air/Bus) is relevant here
+          fromVal = (item.travelFrom || '\u2014').substring(0, 14);
+          toVal   = (item.travelTo   || '\u2014').substring(0, 12);
+          modeVal = (item.travelMode || '\u2014').substring(0, 9);
+          daysVal = item.daysCount > 0 ? String(item.daysCount) : '\u2014';
+        } else if (key === 'Local Conveyance') {
+          // No travel mode — vehicle type/notes stored in details field
+          fromVal = (item.travelFrom || '\u2014').substring(0, 14);
+          toVal   = (item.travelTo   || '\u2014').substring(0, 12);
+          modeVal = (item.details    || '\u2014').substring(0, 12); // vehicle type from notes
+          daysVal = item.daysCount > 0 ? String(item.daysCount) : '\u2014';
+        } else if (key === 'Hotel / Lodging') {
+          fromVal = item.travelFrom ? item.travelFrom.substring(0, 14) : '\u2014';
+          toVal   = item.daysCount > 0 ? `${item.daysCount} night${item.daysCount !== 1 ? 's' : ''}` : '\u2014';
+          modeVal = item.travelMode ? item.travelMode.substring(0, 9) : '\u2014';
+          daysVal = item.daysCount > 0 ? String(item.daysCount) : '\u2014';
+        } else if (key === 'Daily Allowance') {
+          fromVal = item.travelFrom ? item.travelFrom.substring(0, 14) : '\u2014';
+          toVal   = item.travelTo   ? item.travelTo.substring(0, 12)   : '\u2014';
+          modeVal = item.ratePerDay > 0 ? `Rs.${item.ratePerDay}` : '\u2014';
+          daysVal = item.daysCount > 0 ? String(item.daysCount) : '\u2014';
         } else {
-          toVal = (item.travelTo || '').substring(0, 11) ||
-            (key !== 'Daily Allowance' && key !== 'Other Expenses' ? '—' : '');
+          // Other Expenses
+          fromVal = item.travelFrom ? item.travelFrom.substring(0, 14) : '\u2014';
+          toVal   = item.travelTo   ? item.travelTo.substring(0, 12)   : '\u2014';
+          modeVal = '\u2014';
+          daysVal = '\u2014';
         }
-        drawText(doc, toVal, CX.to + 3, cy + 4, { size: 8 });
 
-        // Mode
-        drawText(doc, (item.travelMode || '—').substring(0, 8), CX.mode + 3, cy + 4, {
-          size: 7.5, color: COLOR.greyTxt,
-        });
-
-        // Days count
-        drawText(doc, item.daysCount > 0 ? String(item.daysCount) : '—', CX.days, cy + 4, {
+        drawText(doc, fromVal, CX.from + 3, cy + 4, { size: 8 });
+        drawText(doc, toVal,   CX.to   + 3, cy + 4, { size: 8 });
+        drawText(doc, modeVal, CX.mode + 3, cy + 4, { size: 7.5, color: COLOR.greyTxt });
+        drawText(doc, daysVal, CX.days,     cy + 4, {
           size: 8, color: COLOR.greyTxt, align: 'center', width: CW.days,
         });
 
-        // Amount — bold, right-aligned
         drawText(doc, fmtRs(item.amount), CX.amt, cy + 4, {
           font: 'Helvetica-Bold', size: 8.5, align: 'right', width: CW.amt - 3,
         });
@@ -264,7 +304,6 @@ function generateTripPdf(doc, trip, isFirstTrip) {
     }
   });
 
-  // Outer border around entire table
   strokeRect(doc, M, tableStartY, PW, cy - tableStartY, COLOR.border, 0.7);
   cy += 6;
 
@@ -322,7 +361,7 @@ function generateTripPdf(doc, trip, isFirstTrip) {
   cy += 30;
 
   // ── 7. SIGNATURE ROW ─────────────────────────────────────────
-  const sigH   = 38;
+  const sigH    = 38;
   const sigColW = PW / 3;
   fillRect(doc, M, cy, PW, sigH, COLOR.sigBg);
   strokeRect(doc, M, cy, PW, sigH, COLOR.border, 0.7);
@@ -343,9 +382,6 @@ function generateTripPdf(doc, trip, isFirstTrip) {
     M, cy + 5, { size: 6.5, color: COLOR.liteTxt, align: 'right', width: PW });
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Download helper (shared with adminController ZIP exports)
-// ─────────────────────────────────────────────────────────────────
 async function downloadReceiptToTemp(url, destPath) {
   try {
     const res = await axios({ method: 'GET', url, responseType: 'stream', timeout: 30000 });
@@ -361,10 +397,6 @@ async function downloadReceiptToTemp(url, destPath) {
     return false;
   }
 }
-
-// ─────────────────────────────────────────────────────────────────
-// CONTROLLERS
-// ─────────────────────────────────────────────────────────────────
 
 exports.exportUserExpensesPdf = async (req, res) => {
   const { userId } = req.params;
@@ -473,5 +505,5 @@ exports.exportAllExpensesCSV = async (req, res) => {
   }
 };
 
-exports.generateTripPdf    = generateTripPdf;
+exports.generateTripPdf       = generateTripPdf;
 exports.downloadReceiptToTemp = downloadReceiptToTemp;

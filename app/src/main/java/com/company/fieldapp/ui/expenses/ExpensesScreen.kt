@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -303,7 +304,6 @@ fun ExpensesScreen(
                         SyncBanner(
                             unsyncedCount = uiState.unsyncedCount,
                             isSyncing     = uiState.isSyncing,
-                            isOnline      = viewModel.isOnline(),
                             onRetry       = { viewModel.syncUnsyncedTrips() }
                         )
                     }
@@ -932,7 +932,6 @@ fun ExpenseItemForm(
 fun SyncBanner(
     unsyncedCount: Int,
     isSyncing: Boolean,
-    isOnline: Boolean,
     onRetry: () -> Unit
 ) {
     val bgColor     = if (isSyncing) Color(0xFFE3F2FD) else Color(0xFFFFF8E1)
@@ -972,7 +971,6 @@ fun SyncBanner(
                 Text(
                     text = when {
                         isSyncing -> "Syncing trips to server..."
-                        !isOnline -> "$unsyncedCount trip(s) saved offline — no internet"
                         else      -> "$unsyncedCount trip(s) not yet synced"
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -981,14 +979,13 @@ fun SyncBanner(
                 )
                 if (!isSyncing) {
                     Text(
-                        text = if (isOnline) "Tap Retry to upload now"
-                        else "Will sync automatically when connected",
+                        text = "Tap Retry to upload now",
                         style = MaterialTheme.typography.labelSmall,
                         color = Color(0xFF795548)
                     )
                 }
             }
-            if (!isSyncing && isOnline) {
+            if (!isSyncing) {
                 Spacer(Modifier.width(8.dp))
                 TextButton(
                     onClick = onRetry,
@@ -1179,12 +1176,28 @@ fun ExpenseBreakdownRow(
                 fontWeight = FontWeight.Medium
             )
             val sub = buildString {
-                if (expense.travelFrom.isNotBlank())
-                    append("${expense.travelFrom} → ${expense.travelTo}")
-                if (expense.travelMode.isNotBlank())
-                    append("  (${expense.travelMode})")
-                if (expense.daysCount > 0)
-                    append("  ${expense.daysCount} days")
+                when (expense.expenseType) {
+                    "Air / Train / Bus" -> {
+                        if (expense.travelFrom.isNotBlank())
+                            append("${expense.travelFrom} → ${expense.travelTo}")
+                        if (expense.travelMode.isNotBlank())
+                            append("  (${expense.travelMode})")
+                    }
+                    "Local Conveyance" -> {
+                        if (expense.travelFrom.isNotBlank())
+                            append("${expense.travelFrom} → ${expense.travelTo}")
+                        // vehicle type is in details field — shown below via the shared details append
+                    }
+                    "Daily Allowance" -> {
+                        if (expense.daysCount > 0)
+                            append("${expense.daysCount} days @ ₹${expense.ratePerDay.toInt()}/day")
+                    }
+                    "Hotel / Lodging" -> {
+                        if (expense.daysCount > 0)
+                            append("${expense.daysCount} night${if (expense.daysCount > 1) "s" else ""}")
+                    }
+                    // "Other Expenses" — details only, no travel fields
+                }
                 if (expense.details.isNotBlank()) {
                     if (isNotEmpty()) append("  ·  ")
                     append(expense.details)

@@ -1,11 +1,6 @@
 package com.company.fieldapp.ui.expenses
 
 import android.app.Application
-import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -84,11 +79,12 @@ data class ExpenseUiState(
 
 class ExpensesViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val dao        = AppDatabase.getDatabase(application).expenseDao()
-    private val repository = ExpenseRepository(dao)
+    private val dao            = AppDatabase.getDatabase(application).expenseDao()
+    private val repository     = ExpenseRepository(dao)
     private val sessionManager = SessionManager(application)
-    private val userId     = sessionManager.getUserId() ?: ""
-    private val employeeId = sessionManager.getEmployeeId() ?: ""
+    private val userId         = sessionManager.getUserId() ?: ""
+    private val employeeId     = sessionManager.getEmployeeId() ?: ""
+    private val appContext     = application.applicationContext
 
     private val _uiState = MutableStateFlow(ExpenseUiState())
     val uiState: StateFlow<ExpenseUiState> = _uiState
@@ -96,52 +92,28 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
     private val _form = MutableStateFlow(TripForm())
     val form: StateFlow<TripForm> = _form
 
+    // Prevents two sync loops running simultaneously
     private var syncJob: Job? = null
-
-    private val connectivityManager =
-        application.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-
-    // Fires syncUnsyncedTrips the moment internet reconnects — mirrors AttendanceViewModel
-    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) {
-            Log.d("ExpensesVM", "Network available — retrying unsynced trips")
-            syncUnsyncedTrips()
-        }
-    }
 
     init {
         loadExpenses()
-        // Delay 600ms so SessionManager has fully restored auth token before
-        // any network calls fire — same pattern as AttendanceViewModel
+        // Same pattern as AttendanceViewModel — delay 600ms for token restore, then sync
         viewModelScope.launch {
             delay(600)
             refreshUnsyncedCount()
             syncUnsyncedTrips()
             refreshStatusFromServer()
         }
-        registerNetworkCallback()
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        try { connectivityManager.unregisterNetworkCallback(networkCallback) } catch (_: Exception) {}
-    }
-
-    private fun registerNetworkCallback() {
-        try {
-            val req = NetworkRequest.Builder()
-                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                .build()
-            connectivityManager.registerNetworkCallback(req, networkCallback)
-        } catch (e: Exception) {
-            Log.e("ExpensesVM", "Failed to register network callback: ${e.message}")
+        // Retry loop — every 30s attempt sync if there are pending trips
+        // No isOnline() check — just try it, same as attendance does
+        viewModelScope.launch {
+            while (true) {
+                delay(30_000)
+                if (repository.getUnsyncedCount(userId) > 0) {
+                    syncUnsyncedTrips()
+                }
+            }
         }
-    }
-
-    fun isOnline(): Boolean {
-        val net  = connectivityManager.activeNetwork ?: return false
-        val caps = connectivityManager.getNetworkCapabilities(net) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     // ── Load & group from local DB ────────────────────────────────
@@ -250,7 +222,7 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
                 val tripId  = UUID.randomUUID().toString()
                 val advance = f.advanceAmount.toDoubleOrNull() ?: 0.0
 
-                // 1. Always save locally first — trip is never lost even if offline
+                // 1. Save locally first — trip is never lost even if offline
                 f.items.forEach { item ->
                     val amtInInr = (item.amount.toDoubleOrNull() ?: 0.0).let { amt ->
                         if (_uiState.value.currency == Currency.USD) amt * USD_TO_INR else amt
@@ -280,7 +252,7 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
 
                 _uiState.update { it.copy(showAddForm = false) }
 
-                // 2. Attempt sync immediately — picks up this trip + any older pending ones
+                // 2. Attempt sync immediately (picks up this + any older pending trips)
                 syncUnsyncedTrips()
 
             } catch (e: Exception) {
@@ -292,24 +264,15 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // ── Public sync — called from Retry button, networkCallback, submitTrip ──
-    // Mirrors AttendanceViewModel.syncAttendanceToServer() exactly
+    // ── Sync all pending trips — called on startup, manual retry, after submit ──
     fun syncUnsyncedTrips() {
-        if (syncJob?.isActive == true) return   // prevent overlapping loops
+        if (syncJob?.isActive == true) return   // don't start a second loop
 
         syncJob = viewModelScope.launch {
             try {
                 val count = repository.getUnsyncedCount(userId)
                 _uiState.update { it.copy(unsyncedCount = count) }
                 if (count == 0) return@launch
-
-                if (!isOnline()) {
-                    Log.d("ExpensesVM", "Offline — $count trip(s) queued for sync")
-                    _uiState.update {
-                        it.copy(syncMessage = "$count trip(s) saved offline — waiting for connection")
-                    }
-                    return@launch
-                }
 
                 Log.d("ExpensesVM", "Syncing $count unsynced trip(s)...")
                 _uiState.update { it.copy(isSyncing = true) }
@@ -318,12 +281,12 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
                 val remaining = repository.getUnsyncedCount(userId)
 
                 val message = when {
-                    result.total == 0                                    -> null
-                    result.failed == 0 && result.missingReceipts == 0   ->
+                    result.total == 0                                  -> null
+                    result.failed == 0 && result.missingReceipts == 0 ->
                         "✓ All trips synced successfully"
-                    result.failed == 0 && result.missingReceipts > 0    ->
+                    result.failed == 0 && result.missingReceipts > 0  ->
                         "✓ ${result.success} trip(s) synced — ${result.missingReceipts} receipt image(s) missing from device"
-                    result.success > 0                                   ->
+                    result.success > 0 ->
                         "${result.success} synced, $remaining still pending"
                     else -> null
                 }
@@ -347,24 +310,23 @@ class ExpensesViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    // ── Pull latest trip statuses from server ────────────────────
+    // ── Pull latest trip statuses from server ─────────────────────
     private fun refreshStatusFromServer() {
         viewModelScope.launch {
             try {
                 val response = RetrofitClient.tripApi.getMyTrips()
                 if (!response.isSuccessful || response.body()?.success != true) return@launch
 
-                var updatedCount = 0
+                var updated = 0
                 for (serverTrip in response.body()!!.data) {
                     val localItems = dao.getItemsByServerId(serverTrip._id)
                     if (localItems.isEmpty()) continue
                     if (localItems.first().status != serverTrip.status) {
                         dao.updateTripStatus(localItems.first().tripId, serverTrip.status)
-                        updatedCount++
+                        updated++
                     }
                 }
-                if (updatedCount > 0)
-                    Log.d("ExpensesVM", "$updatedCount trip status(es) refreshed from server")
+                if (updated > 0) Log.d("ExpensesVM", "$updated trip status(es) refreshed")
 
             } catch (e: Exception) {
                 Log.w("ExpensesVM", "Status refresh (non-critical): ${e.message}")

@@ -65,7 +65,7 @@ class ExpenseRepository(private val dao: ExpenseDao) {
                     Log.d(TAG, "Trip $tripId synced → $serverId")
                     success++
                 } else {
-                    Log.w(TAG, "Trip $tripId: server returned null id")
+                    Log.w(TAG, "Trip $tripId: server returned null id — will retry")
                     failed++
                 }
             } catch (e: Exception) {
@@ -103,7 +103,7 @@ class ExpenseRepository(private val dao: ExpenseDao) {
         return if (response.isSuccessful && response.body()?.success == true)
             response.body()?.data?._id
         else {
-            Log.e(TAG, "JSON submit error: ${response.body()?.message}")
+            Log.e(TAG, "JSON submit error HTTP ${response.code()}: ${response.body()?.message}")
             null
         }
     }
@@ -149,7 +149,7 @@ class ExpenseRepository(private val dao: ExpenseDao) {
         return if (response.isSuccessful && response.body()?.success == true)
             response.body()?.data?._id
         else {
-            Log.e(TAG, "Multipart submit error: ${response.body()?.message}")
+            Log.e(TAG, "Multipart submit error HTTP ${response.code()}: ${response.body()?.message}")
             null
         }
     }

@@ -855,12 +855,27 @@ private fun LineItemRow(
                     color      = TextMain
                 )
                 val sub = buildString {
-                    if (expense.travelFrom.isNotBlank())
-                        append("${expense.travelFrom} → ${expense.travelTo}")
-                    if (expense.travelMode.isNotBlank())
-                        append("  (${expense.travelMode})")
-                    if (expense.daysCount > 0)
-                        append("  ${expense.daysCount} day${if (expense.daysCount > 1) "s" else ""}")
+                    when (expense.expenseType) {
+                        "Air / Train / Bus" -> {
+                            if (expense.travelFrom.isNotBlank())
+                                append("${expense.travelFrom} → ${expense.travelTo}")
+                            if (expense.travelMode.isNotBlank())
+                                append("  (${expense.travelMode})")
+                        }
+                        "Local Conveyance" -> {
+                            if (expense.travelFrom.isNotBlank())
+                                append("${expense.travelFrom} → ${expense.travelTo}")
+                            // vehicle type is in details — shown via the shared details append below
+                        }
+                        "Daily Allowance" -> {
+                            if (expense.daysCount > 0)
+                                append("${expense.daysCount} days @ ₹${expense.ratePerDay.toInt()}/day")
+                        }
+                        "Hotel / Lodging" -> {
+                            if (expense.daysCount > 0)
+                                append("${expense.daysCount} night${if (expense.daysCount > 1) "s" else ""}")
+                        }
+                    }
                     if (expense.details.isNotBlank()) {
                         if (isNotEmpty()) append("  ·  ")
                         append(expense.details)
