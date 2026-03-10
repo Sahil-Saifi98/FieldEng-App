@@ -173,12 +173,28 @@ function generateTripPdf(doc, trip, isFirstTrip) {
   const LABEL_H     = 11;
   const C1W = PW * 0.58;
   const C2W = PW - C1W;
-  // Calculate total days from trip start/end dates (inclusive), e.g. 1 Mar → 3 Mar = 3 days
+  // Calculate total days from trip start/end dates (inclusive).
+  // Handles DD-M-YYYY / DD-MM-YYYY string format stored in periodFrom/periodTo.
+  const parseTripDate = (str) => {
+    if (!str) return null;
+    // Try splitting by '-': "1-3-2026" → [1, 3, 2026] (day, month, year)
+    const parts = String(str).split('-');
+    if (parts.length === 3) {
+      const [d, m, y] = parts.map(Number);
+      if (!isNaN(d) && !isNaN(m) && !isNaN(y)) {
+        return new Date(y, m - 1, d); // month is 0-indexed
+      }
+    }
+    // Fallback: let JS try to parse (covers ISO strings)
+    const fallback = new Date(str);
+    return isNaN(fallback) ? null : fallback;
+  };
+
   const totalDays = (() => {
     try {
-      const from = new Date(trip.periodFrom);
-      const to   = new Date(trip.periodTo);
-      if (isNaN(from) || isNaN(to)) return 0;
+      const from = parseTripDate(trip.periodFrom);
+      const to   = parseTripDate(trip.periodTo);
+      if (!from || !to) return 0;
       return Math.max(1, Math.round((to - from) / (1000 * 60 * 60 * 24)) + 1);
     } catch { return 0; }
   })();
