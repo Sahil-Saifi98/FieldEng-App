@@ -173,7 +173,15 @@ function generateTripPdf(doc, trip, isFirstTrip) {
   const LABEL_H     = 11;
   const C1W = PW * 0.58;
   const C2W = PW - C1W;
-  const totalDays = (trip.expenses || []).reduce((s, e) => s + (e.daysCount || 0), 0);
+  // Calculate total days from trip start/end dates (inclusive), e.g. 1 Mar → 3 Mar = 3 days
+  const totalDays = (() => {
+    try {
+      const from = new Date(trip.periodFrom);
+      const to   = new Date(trip.periodTo);
+      if (isNaN(from) || isNaN(to)) return 0;
+      return Math.max(1, Math.round((to - from) / (1000 * 60 * 60 * 24)) + 1);
+    } catch { return 0; }
+  })();
 
   const infoRows = [
     { l1: 'EMPLOYEE NAME',   v1: trip.employeeName  || '—',
