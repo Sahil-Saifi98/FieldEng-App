@@ -230,17 +230,27 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                         return@launch
                     }
                 }
-                if (response.isSuccessful && response.body() != null) {
-                    val fileName = "attendance_${System.currentTimeMillis()}.$format"
-                    val saved = saveToDownloadsOptimized(response.body()!!, fileName)
-                    if (saved != null) {
-                        _exportStatus.value = ExportStatus(true, "✅ Downloaded: $fileName")
-                        showToast("Downloaded!")
-                    } else {
-                        _exportStatus.value = ExportStatus(false, "Failed to save file")
+                if (!response.isSuccessful) {
+                    val msg = when (response.code()) {
+                        404 -> "No attendance records found for selected date range"
+                        504 -> "Timeout — try a smaller date range"
+                        else -> "Export failed: HTTP ${response.code()}"
                     }
+                    _exportStatus.value = ExportStatus(false, msg)
+                    return@launch
+                }
+                val body = response.body()
+                if (body == null) {
+                    _exportStatus.value = ExportStatus(false, "Empty response from server")
+                    return@launch
+                }
+                val fileName = "attendance_${System.currentTimeMillis()}.$format"
+                val saved = saveToDownloadsOptimized(body, fileName)
+                if (saved != null) {
+                    _exportStatus.value = ExportStatus(true, "✅ Downloaded: $fileName")
+                    showToast("Downloaded!")
                 } else {
-                    _exportStatus.value = ExportStatus(false, "Export failed: ${response.code()}")
+                    _exportStatus.value = ExportStatus(false, "Failed to save file")
                 }
             } catch (e: Exception) {
                 _exportStatus.value = ExportStatus(false, "Error: ${e.message}")
@@ -269,17 +279,40 @@ class AdminExportViewModel(application: Application) : AndroidViewModel(applicat
                         return@launch
                     }
                 }
-                if (response.isSuccessful && response.body() != null) {
-                    val fileName = "expenses_${System.currentTimeMillis()}.$format"
-                    val saved = saveToDownloadsOptimized(response.body()!!, fileName)
-                    if (saved != null) {
-                        _exportStatus.value = ExportStatus(true, "✅ Downloaded: $fileName")
-                        showToast("Downloaded!")
-                    } else {
-                        _exportStatus.value = ExportStatus(false, "Failed to save file")
+                if (!response.isSuccessful) {
+                    val msg = when (response.code()) {
+                        404 -> "No expense records found for selected date range"
+                        504 -> "Timeout — try a smaller date range"
+                        else -> "Export failed: HTTP ${response.code()}"
                     }
+                    _exportStatus.value = ExportStatus(false, msg)
+                    Log.e("AdminExportVM", "exportExpenses HTTP ${response.code()}")
+                    return@launch
+                }
+                val body = response.body()
+                if (body == null) {
+                    _exportStatus.value = ExportStatus(false, "Empty response from server")
+                    return@launch
+                }
+                // Guard: server may return JSON error even with 200 if no trips exist
+                val contentType = response.headers()["Content-Type"] ?: ""
+                val expectedType = if (format == "pdf") "application/pdf" else "text/csv"
+                if (!contentType.contains(expectedType, ignoreCase = true)) {
+                    // Server returned JSON/error instead of the file
+                    val errBody = withContext(Dispatchers.IO) {
+                        body.string().take(200)
+                    }
+                    Log.e("AdminExportVM", "Wrong content-type: $contentType — body: $errBody")
+                    _exportStatus.value = ExportStatus(false, "No expense data found for selected range")
+                    return@launch
+                }
+                val fileName = "expenses_${System.currentTimeMillis()}.$format"
+                val saved = saveToDownloadsOptimized(body, fileName)
+                if (saved != null) {
+                    _exportStatus.value = ExportStatus(true, "✅ Downloaded: $fileName")
+                    showToast("Downloaded!")
                 } else {
-                    _exportStatus.value = ExportStatus(false, "Export failed: ${response.code()}")
+                    _exportStatus.value = ExportStatus(false, "Failed to save file")
                 }
             } catch (e: Exception) {
                 _exportStatus.value = ExportStatus(false, "Error: ${e.message}")

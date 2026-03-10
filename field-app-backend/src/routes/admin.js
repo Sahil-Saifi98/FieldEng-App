@@ -120,8 +120,9 @@ router.get('/export/attendance/pdf', exportAttendancePDF);
 router.get('/export/attendance/json', exportAttendanceJSON);
 
 // Expense Export Routes
-router.get('/export/expenses/pdf/:userId', exportUserExpensesPdf);
+// Specific routes MUST come before parameterized /:userId — Express matches top-down
 router.get('/export/expenses/pdf', exportAllExpensesPdf);
 router.get('/export/expenses/csv', exportAllExpensesCSV);
+router.get('/export/expenses/pdf/:userId', exportUserExpensesPdf);
 
 module.exports = router;
