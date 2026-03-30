@@ -21,16 +21,10 @@ router.post('/submit', uploadExpense.array('receipts', 10), submitTrip);
 
 // Get stats
 router.get('/stats', getTripStats);
-
-// Get all my trips
+router.get('/admin/all', authorize('admin'), getAllTrips);      // ← move up
+router.get('/admin/stats', authorize('admin'), getAdminTripStats); // ← move up
 router.get('/', getMyTrips);
-
-// Get single trip
-router.get('/:id', getTrip);
-
-// ── Admin routes ──────────────────────────────────────────────────
-router.get('/admin/all', authorize('admin'), getAllTrips);
-router.get('/admin/stats', authorize('admin'), getAdminTripStats);
+router.get('/:id', getTrip);   // ← keep last
 router.put('/admin/:id/status', authorize('admin'), updateTripStatus);
 
 module.exports = router;

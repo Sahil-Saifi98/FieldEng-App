@@ -31,8 +31,8 @@ const connectSecondaryDB = async () => {
     });
 
     secondaryConn.on('error', (err) => {
-      console.error(`❌ Secondary DB Error: ${err.message}`);
-    });
+  console.error(`❌ Secondary DB Error: ${err?.message || err || 'unknown'}`);
+});
 
     return secondaryConn;
   } catch (error) {
