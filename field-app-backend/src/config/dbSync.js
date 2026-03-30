@@ -5,6 +5,7 @@ let secondaryConnection = null;
 // Initialize secondary connection
 const initSecondaryConnection = async () => {
   try {
+    // No useNewUrlParser / useUnifiedTopology — both deprecated and removed in driver v4+
     secondaryConnection = mongoose.createConnection(
       process.env.MONGODB_URI_SECONDARY
     );
@@ -13,9 +14,14 @@ const initSecondaryConnection = async () => {
       console.log('🔄 Secondary DB ready for sync');
     });
 
+    secondaryConnection.on('error', (err) => {
+      // Guard against non-Error objects (plain strings, undefined, etc.)
+      console.error('❌ Secondary DB error:', err?.message || err || 'unknown error');
+    });
+
     return secondaryConnection;
   } catch (error) {
-    console.error('Secondary DB sync init failed:', error.message);
+    console.error('Secondary DB sync init failed:', error?.message || error);
     return null;
   }
 };

@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 // Generate JWT Token
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRE || '30d'
+    expiresIn: process.env.JWT_EXPIRE || '30d'  // fallback — prevents crash if env var missing
   });
 };
 
@@ -134,7 +134,7 @@ exports.login = async (req, res) => {
 // @access  Private
 exports.getMe = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user._id);  // use _id not .id (virtual) to avoid undefined on serialized objects
 
     res.status(200).json({
       success: true,
@@ -163,7 +163,7 @@ exports.updateProfile = async (req, res) => {
   try {
     const { name, email, department, designation } = req.body;
 
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user._id);  // use _id not .id (virtual)
 
     if (!user) {
       return res.status(404).json({

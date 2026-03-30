@@ -43,7 +43,7 @@ object RetrofitClient {
         .addInterceptor(loggingInterceptor)
         .addInterceptor(AuthInterceptor { authToken })
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)
+        .readTimeout(120, TimeUnit.SECONDS)  // Increased to 120s — matches Cloudinary's 2-min upload timeout
         .writeTimeout(120, TimeUnit.SECONDS) // 2 min for receipt image uploads
         .build()
 

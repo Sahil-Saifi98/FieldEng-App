@@ -63,11 +63,17 @@ app.use((req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error:', err.stack);
-  res.status(500).json({
-    success: false,
-    message: err.message || 'Server Error'
-  });
+  // Cloudinary and multer-storage-cloudinary pass plain objects (not Error instances)
+  // e.g. { error: { message: "...", http_code: 400 } } — these have no .stack
+  const message = err?.message || err?.error?.message || 'Server Error';
+  const stack = err?.stack || JSON.stringify(err?.error || err);
+  console.error('❌ Unhandled error:', stack);
+  if (!res.headersSent) {
+    res.status(500).json({
+      success: false,
+      message
+    });
+  }
 });
 
 // Start server

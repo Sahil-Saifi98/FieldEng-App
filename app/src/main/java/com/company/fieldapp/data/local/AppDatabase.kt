@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [AttendanceEntity::class, ExpenseEntity::class],
-    version = 5,
+    version = 7,                         // ← bumped from 6 → 7
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -78,11 +78,110 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        // Adds serverId and receiptUrl columns for backend sync
         private val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(database: SupportSQLiteDatabase) {
                 database.execSQL("ALTER TABLE expenses ADD COLUMN serverId TEXT NOT NULL DEFAULT ''")
                 database.execSQL("ALTER TABLE expenses ADD COLUMN receiptUrl TEXT")
+            }
+        }
+
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS attendance_new (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        userId      TEXT    NOT NULL DEFAULT '',
+                        employeeId  TEXT    NOT NULL DEFAULT '',
+                        selfiePath  TEXT    NOT NULL DEFAULT '',
+                        latitude    REAL    NOT NULL DEFAULT 0.0,
+                        longitude   REAL    NOT NULL DEFAULT 0.0,
+                        address     TEXT    NOT NULL DEFAULT '',
+                        timestamp   INTEGER NOT NULL DEFAULT 0,
+                        isSynced    INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+                try {
+                    database.execSQL("""
+                        INSERT INTO attendance_new
+                            (id, userId, employeeId, selfiePath,
+                             latitude, longitude, address, timestamp, isSynced)
+                        SELECT
+                            id,
+                            COALESCE(userId,     ''),
+                            COALESCE(employeeId, ''),
+                            COALESCE(selfiePath, ''),
+                            COALESCE(latitude,   0.0),
+                            COALESCE(longitude,  0.0),
+                            COALESCE(address,    ''),
+                            COALESCE(timestamp,  0),
+                            COALESCE(isSynced,   0)
+                        FROM attendance
+                    """)
+                } catch (e: Exception) {
+                    android.util.Log.w("AppDatabase",
+                        "MIGRATION_5_6: could not copy rows — starting fresh. ${e.message}")
+                }
+                database.execSQL("DROP TABLE IF EXISTS attendance")
+                database.execSQL("ALTER TABLE attendance_new RENAME TO attendance")
+                database.execSQL("CREATE INDEX IF NOT EXISTS idx_attendance_synced ON attendance(isSynced, userId)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS idx_attendance_user ON attendance(userId)")
+            }
+        }
+
+        // ── v6 → v7 ───────────────────────────────────────────────────────────
+        // Devices that received the v6 APK now have the correct table structure
+        // but Room's expected schema hash still doesn't match because the @Entity
+        // indices declaration was added. This migration drops and recreates the
+        // table + indexes so the schema hash aligns with AttendanceEntity exactly.
+        // All existing rows are preserved.
+        // ─────────────────────────────────────────────────────────────────────
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("DROP INDEX IF EXISTS idx_attendance_synced")
+                database.execSQL("DROP INDEX IF EXISTS idx_attendance_user")
+
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS attendance_v7 (
+                        id          INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        userId      TEXT    NOT NULL DEFAULT '',
+                        employeeId  TEXT    NOT NULL DEFAULT '',
+                        selfiePath  TEXT    NOT NULL DEFAULT '',
+                        latitude    REAL    NOT NULL DEFAULT 0.0,
+                        longitude   REAL    NOT NULL DEFAULT 0.0,
+                        address     TEXT    NOT NULL DEFAULT '',
+                        timestamp   INTEGER NOT NULL DEFAULT 0,
+                        isSynced    INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+
+                try {
+                    database.execSQL("""
+                        INSERT INTO attendance_v7
+                            (id, userId, employeeId, selfiePath,
+                             latitude, longitude, address, timestamp, isSynced)
+                        SELECT
+                            id,
+                            COALESCE(userId,     ''),
+                            COALESCE(employeeId, ''),
+                            COALESCE(selfiePath, ''),
+                            COALESCE(latitude,   0.0),
+                            COALESCE(longitude,  0.0),
+                            COALESCE(address,    ''),
+                            COALESCE(timestamp,  0),
+                            COALESCE(isSynced,   0)
+                        FROM attendance
+                    """)
+                } catch (e: Exception) {
+                    android.util.Log.w("AppDatabase",
+                        "MIGRATION_6_7: row copy failed — starting fresh. ${e.message}")
+                }
+
+                database.execSQL("DROP TABLE IF EXISTS attendance")
+                database.execSQL("ALTER TABLE attendance_v7 RENAME TO attendance")
+
+                // Must match @Entity(indices=[...]) in AttendanceEntity exactly
+                database.execSQL("CREATE INDEX IF NOT EXISTS idx_attendance_synced ON attendance(isSynced, userId)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS idx_attendance_user ON attendance(userId)")
             }
         }
 
@@ -93,7 +192,14 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "field_app_database"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5,
+                        MIGRATION_5_6,
+                        MIGRATION_6_7
+                    )
                     .fallbackToDestructiveMigration()
                     .build()
                 INSTANCE = instance

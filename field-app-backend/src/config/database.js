@@ -14,39 +14,11 @@ const connectPrimaryDB = async () => {
   }
 };
 
-// Secondary Database Connection (HR Database)
-const connectSecondaryDB = async () => {
-  try {
-    const secondaryConn = mongoose.createConnection(
-      process.env.MONGODB_URI_SECONDARY,
-      {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-      }
-    );
-
-    secondaryConn.on('connected', () => {
-      console.log(`✅ Secondary MongoDB Connected: ${secondaryConn.host}`);
-      console.log(`📊 Secondary Database: ${secondaryConn.name}`);
-    });
-
-    secondaryConn.on('error', (err) => {
-  console.error(`❌ Secondary DB Error: ${err?.message || err || 'unknown'}`);
-});
-
-    return secondaryConn;
-  } catch (error) {
-    console.error(`❌ Secondary DB Connection Error: ${error.message}`);
-    return null;
-  }
-};
-
-// Connect both databases
+// Connect primary DB only — secondary is managed exclusively by dbSync.js
+// Having two separate secondary connections was wasting connection pool slots
+// and could cause MongoServerSelectionError on free-tier connection limits
 const connectDB = async () => {
-  const primaryDB = await connectPrimaryDB();
-  const secondaryDB = await connectSecondaryDB();
-  
-  return { primaryDB, secondaryDB };
+  await connectPrimaryDB();
 };
 
 module.exports = connectDB;
